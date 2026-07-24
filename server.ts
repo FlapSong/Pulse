@@ -90,6 +90,19 @@ const PORT = Number(process.env.PORT) || 3000;
 app.use(cors());
 app.use(express.json());
 
+// Ensure Firebase & default users are initialized on cold-start requests
+app.use(async (req, res, next) => {
+  if (db === undefined) {
+    try {
+      await initFirebase();
+      await ensureDefaultUsers();
+    } catch (err: any) {
+      console.error('Firebase auto-init error:', err?.message || err);
+    }
+  }
+  next();
+});
+
 // API Health Check
 app.get('/api/health', async (req, res) => {
   await initFirebase();
