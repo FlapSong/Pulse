@@ -1,0 +1,6 @@
+{
+  "name": "Pulse HQ v2.0.0",
+  "description": "High-performance, ultra-smooth desktop communication platform for gamers.",
+  "requestFramePermissions": ["microphone"],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}

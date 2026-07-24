@@ -1,0 +1,38 @@
+{
+  "collections": [
+    {
+      "id": "users",
+      "description": "User profiles and account information",
+      "fields": [
+        { "name": "login", "type": "string", "description": "Unique username" },
+        { "name": "displayName", "type": "string" },
+        { "name": "password", "type": "string" },
+        { "name": "email", "type": "string" },
+        { "name": "avatar", "type": "string" },
+        { "name": "role", "type": "string" },
+        { "name": "badge", "type": "string" },
+        { "name": "isVerified", "type": "boolean" },
+        { "name": "verificationCode", "type": "string" },
+        { "name": "createdAt", "type": "number" },
+        { "name": "status", "type": "string" },
+        { "name": "customStatus", "type": "string" },
+        { "name": "friends", "type": "array" },
+        { "name": "friendRequestsIncoming", "type": "array" },
+        { "name": "friendRequestsOutgoing", "type": "array" }
+      ]
+    },
+    {
+      "id": "emails",
+      "description": "Verification emails and notifications history",
+      "fields": [
+        { "name": "to", "type": "string" },
+        { "name": "subject", "type": "string" },
+        { "name": "body", "type": "string" },
+        { "name": "code", "type": "string" },
+        { "name": "type", "type": "string" },
+        { "name": "createdAt", "type": "number" },
+        { "name": "read", "type": "boolean" }
+      ]
+    }
+  ]
+}
