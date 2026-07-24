@@ -121,9 +121,11 @@ app.get('/api/health', async (req, res) => {
 
 // Persistent JSON file paths (Legacy - keeping for Electron local fallback if needed, but primary is Firestore)
 const isElectron = !!process.versions.electron;
-const DATA_DIR = isElectron 
-  ? path.join(process.env.APPDATA || (process.platform === 'darwin' ? path.join(process.env.HOME || '', 'Library/Application Support') : '/tmp'), 'PulseData')
-  : path.join(process.cwd(), 'data');
+const DATA_DIR = process.env.VERCEL
+  ? '/tmp/data'
+  : (isElectron 
+      ? path.join(process.env.APPDATA || (process.platform === 'darwin' ? path.join(process.env.HOME || '', 'Library/Application Support') : '/tmp'), 'PulseData')
+      : path.join(process.cwd(), 'data'));
 
 const USERS_FILE = path.join(DATA_DIR, 'users.json');
 const EMAILS_FILE = path.join(DATA_DIR, 'emails.json');
