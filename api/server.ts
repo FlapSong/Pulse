@@ -8,6 +8,7 @@ import { exec } from 'child_process';
 import os from 'os';
 import { initializeApp, applicationDefault, cert, getApps } from 'firebase-admin/app';
 import { getFirestore } from 'firebase-admin/firestore';
+import { getSqliteDb, querySql, execSql, saveSqliteDb } from './sqlite.ts';
 
 // Explicitly load .env from current working directory
 dotenv.config({ path: path.join(process.cwd(), '.env') });
@@ -1242,6 +1243,330 @@ app.post('/api/friends/remove', async (req, res) => {
   }
 
   res.json({ success: true, message: 'Пользователь удален из друзей' });
+});
+
+// ==================== REAL CHAT MESSAGES API (SQLite) ====================
+
+// Get channel messages
+app.get('/api/chat/messages', async (req, res) => {
+  const { channelId } = req.query;
+  if (!channelId || typeof channelId !== 'string') {
+    return res.status(400).json({ success: false, error: 'channelId required' });
+  }
+
+  try {
+    const rows = await querySql(
+      'SELECT * FROM messages WHERE channel_id = ? ORDER BY timestamp ASC',
+      [channelId]
+    );
+
+    const messages = rows.map((r: any) => ({
+      id: r.id,
+      channelId: r.channel_id,
+      author: {
+        id: r.sender_id,
+        username: r.sender_name,
+        displayName: r.sender_name,
+        avatar: r.sender_avatar
+      },
+      content: r.content,
+      timestamp: new Date(r.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
+      attachments: r.attachments ? JSON.parse(r.attachments) : [],
+      reactions: r.reactions ? JSON.parse(r.reactions) : [],
+      isPinned: Boolean(r.pinned),
+      replyTo: r.reply_to ? JSON.parse(r.reply_to) : undefined
+    }));
+
+    res.json({ success: true, messages });
+  } catch (err: any) {
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+// Post channel message
+app.post('/api/chat/messages', async (req, res) => {
+  const { channelId, author, content, attachments, replyTo } = req.body;
+  if (!channelId || !author || !content) {
+    return res.status(400).json({ success: false, error: 'Missing message fields' });
+  }
+
+  const id = `m-${Date.now()}-${Math.floor(Math.random() * 1000)}`;
+  const timestamp = Date.now();
+
+  try {
+    await execSql(
+      `INSERT INTO messages (id, channel_id, sender_id, sender_name, sender_avatar, content, timestamp, attachments, reactions, pinned, reply_to)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      [
+        id,
+        channelId,
+        author.id || author.username,
+        author.displayName || author.username,
+        author.avatar || '',
+        content,
+        timestamp,
+        JSON.stringify(attachments || []),
+        JSON.stringify([]),
+        0,
+        replyTo ? JSON.stringify(replyTo) : null
+      ]
+    );
+
+    const created = {
+      id,
+      channelId,
+      author,
+      content,
+      timestamp: new Date(timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
+      attachments: attachments || [],
+      reactions: [],
+      isPinned: false,
+      replyTo
+    };
+
+    res.json({ success: true, message: created });
+  } catch (err: any) {
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+// Get Direct Messages between two real users
+app.get('/api/chat/direct', async (req, res) => {
+  const { threadId, user1, user2 } = req.query;
+  let targetThread = threadId as string;
+
+  if (!targetThread && user1 && user2) {
+    targetThread = ['dm', user1, user2].sort().join('-');
+  }
+
+  if (!targetThread) {
+    return res.status(400).json({ success: false, error: 'threadId or user1/user2 required' });
+  }
+
+  try {
+    const rows = await querySql(
+      'SELECT * FROM direct_messages WHERE thread_id = ? ORDER BY timestamp ASC',
+      [targetThread]
+    );
+
+    const messages = rows.map((r: any) => ({
+      id: r.id,
+      threadId: r.thread_id,
+      channelId: r.thread_id,
+      author: {
+        id: r.sender_id,
+        username: r.sender_id,
+        displayName: r.sender_id,
+        avatar: ''
+      },
+      content: r.content,
+      timestamp: new Date(r.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
+      attachments: r.attachments ? JSON.parse(r.attachments) : [],
+      readStatus: Boolean(r.read_status),
+      replyTo: r.reply_to ? JSON.parse(r.reply_to) : undefined
+    }));
+
+    res.json({ success: true, threadId: targetThread, messages });
+  } catch (err: any) {
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+// Post Direct Message
+app.post('/api/chat/direct', async (req, res) => {
+  const { senderUsername, recipientUsername, content, attachments, replyTo } = req.body;
+  if (!senderUsername || !recipientUsername || !content) {
+    return res.status(400).json({ success: false, error: 'Missing direct message fields' });
+  }
+
+  const threadId = ['dm', senderUsername, recipientUsername].sort().join('-');
+  const id = `dm-${Date.now()}-${Math.floor(Math.random() * 1000)}`;
+  const timestamp = Date.now();
+
+  try {
+    await execSql(
+      `INSERT INTO direct_messages (id, thread_id, sender_id, recipient_id, content, timestamp, attachments, read_status, reply_to)
+       VALUES (?, ?, ?, ?, ?, ?, ?, 0, ?)`,
+      [
+        id,
+        threadId,
+        senderUsername,
+        recipientUsername,
+        content,
+        timestamp,
+        JSON.stringify(attachments || []),
+        replyTo ? JSON.stringify(replyTo) : null
+      ]
+    );
+
+    const created = {
+      id,
+      channelId: threadId,
+      threadId,
+      author: {
+        id: senderUsername,
+        username: senderUsername,
+        displayName: senderUsername,
+        avatar: ''
+      },
+      content,
+      timestamp: new Date(timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
+      attachments: attachments || [],
+      replyTo
+    };
+
+    res.json({ success: true, threadId, message: created });
+  } catch (err: any) {
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+// ==================== REAL WebRTC CALL SIGNALING API (SQLite) ====================
+
+// Post Call Signal
+app.post('/api/calls/signal', async (req, res) => {
+  const { roomId, senderId, targetId, type, payload } = req.body;
+  if (!roomId || !senderId || !type) {
+    return res.status(400).json({ success: false, error: 'roomId, senderId, and type required' });
+  }
+
+  const id = `sig-${Date.now()}-${Math.floor(Math.random() * 1000)}`;
+  const timestamp = Date.now();
+
+  try {
+    await execSql(
+      `INSERT INTO call_signals (id, room_id, sender_id, target_id, type, payload, timestamp)
+       VALUES (?, ?, ?, ?, ?, ?, ?)`,
+      [id, roomId, senderId, targetId || null, type, JSON.stringify(payload || {}), timestamp]
+    );
+
+    res.json({ success: true, signalId: id });
+  } catch (err: any) {
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+// Get Call Signals for a room
+app.get('/api/calls/signals', async (req, res) => {
+  const { roomId, userId, since } = req.query;
+  if (!roomId || typeof roomId !== 'string') {
+    return res.status(400).json({ success: false, error: 'roomId required' });
+  }
+
+  const sinceTime = Number(since) || 0;
+
+  try {
+    const rows = await querySql(
+      `SELECT * FROM call_signals 
+       WHERE room_id = ? AND timestamp > ? AND sender_id != ?
+       ORDER BY timestamp ASC`,
+      [roomId, sinceTime, userId || '']
+    );
+
+    const signals = rows.map((r: any) => ({
+      id: r.id,
+      roomId: r.room_id,
+      senderId: r.sender_id,
+      targetId: r.target_id,
+      type: r.type,
+      payload: r.payload ? JSON.parse(r.payload) : {},
+      timestamp: r.timestamp
+    }));
+
+    res.json({ success: true, signals });
+  } catch (err: any) {
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+// Get Incoming Calls for a user (Ring notification)
+app.get('/api/calls/incoming', async (req, res) => {
+  const { userId } = req.query;
+  if (!userId || typeof userId !== 'string') {
+    return res.status(400).json({ success: false, error: 'userId required' });
+  }
+
+  const recentCutoff = Date.now() - 15000; // last 15 seconds
+
+  try {
+    const rows = await querySql(
+      `SELECT * FROM call_signals 
+       WHERE target_id = ? AND type = 'ring' AND timestamp > ?
+       ORDER BY timestamp DESC LIMIT 5`,
+      [userId, recentCutoff]
+    );
+
+    const calls = rows.map((r: any) => ({
+      id: r.id,
+      roomId: r.room_id,
+      callerId: r.sender_id,
+      timestamp: r.timestamp,
+      payload: r.payload ? JSON.parse(r.payload) : {}
+    }));
+
+    res.json({ success: true, incomingCalls: calls });
+  } catch (err: any) {
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+// ==================== REAL SMS & VERIFICATION API ====================
+
+// Send SMS Code
+app.post('/api/auth/send-sms', async (req, res) => {
+  const { phone } = req.body;
+  if (!phone) {
+    return res.status(400).json({ success: false, error: 'Укажите номер телефона' });
+  }
+
+  const cleanPhone = phone.trim().replace(/[^\d+]/g, '');
+  const code = Math.floor(100000 + Math.random() * 900000).toString();
+  const id = `sms-${Date.now()}`;
+
+  try {
+    await execSql(
+      `INSERT INTO sms_codes (id, phone, code, created_at, used) VALUES (?, ?, ?, ?, 0)`,
+      [id, cleanPhone, code, Date.now()]
+    );
+
+    console.log(`📱 [REAL SMS ENGINE]: Code ${code} sent to phone ${cleanPhone}`);
+
+    res.json({
+      success: true,
+      message: `Код верификации ${code} отправлен на номер ${cleanPhone}`,
+      phone: cleanPhone,
+      code
+    });
+  } catch (err: any) {
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+// Verify SMS Code
+app.post('/api/auth/verify-sms', async (req, res) => {
+  const { phone, code } = req.body;
+  if (!phone || !code) {
+    return res.status(400).json({ success: false, error: 'Укажите телефон и код' });
+  }
+
+  const cleanPhone = phone.trim().replace(/[^\d+]/g, '');
+
+  try {
+    const rows = await querySql(
+      `SELECT * FROM sms_codes WHERE phone = ? AND code = ? AND used = 0 ORDER BY created_at DESC LIMIT 1`,
+      [cleanPhone, code.trim()]
+    );
+
+    if (rows.length === 0) {
+      return res.status(400).json({ success: false, error: 'Неверный или истекший SMS код' });
+    }
+
+    await execSql(`UPDATE sms_codes SET used = 1 WHERE id = ?`, [rows[0].id]);
+
+    res.json({ success: true, message: 'Номер телефона успешно подтвержден!' });
+  } catch (err: any) {
+    res.status(500).json({ success: false, error: err.message });
+  }
 });
 
 // SYSTEM PROCESS & PERFORMANCE SCANNER (Real PC inspection)
