@@ -760,21 +760,6 @@ export const AuthModal: React.FC = () => {
                     </>
                   )}
                 </motion.button>
-
-                {/* Quick Guest Temporary Account Button */}
-                <div className="pt-3.5 border-t border-white/[0.08] mt-4 space-y-1.5">
-                  <button
-                    type="button"
-                    onClick={() => loginAsGuest()}
-                    className="w-full py-2.5 rounded-2xl bg-[#18181B] hover:bg-[#222226] border border-white/[0.12] hover:border-[#22D3EE]/40 text-[#F5F5F7] font-bold text-xs flex items-center justify-center gap-2 transition-all cursor-pointer group shadow-sm active:scale-95"
-                  >
-                    <Sparkles className="w-4 h-4 text-[#22D3EE] group-hover:scale-110 transition-transform" />
-                    <span>Быстрый вход как Гость (Временный аккаунт)</span>
-                  </button>
-                  <p className="text-[10px] text-center text-[#A1A1AA]/60">
-                    ⚡ Вход в 1 клик без логина и пароля
-                  </p>
-                </div>
               </form>
             )}
           </>

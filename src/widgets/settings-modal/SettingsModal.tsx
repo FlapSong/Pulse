@@ -14,7 +14,8 @@ import {
   LogOut,
   ChevronDown,
   Globe,
-  Server
+  Server,
+  Layers
 } from 'lucide-react';
 import { useGameStore } from '../../entities/game/gameStore';
 import { useVoiceStore } from '../../entities/voice/voiceStore';
@@ -397,24 +398,13 @@ export const SettingsModal: React.FC = () => {
             )}
 
             {activeSettingsTab === 'overlay' && (
-              <div className="space-y-4">
-                <div className="p-4 rounded-xl bg-slate-950 border border-slate-800 flex items-center justify-between">
-                  <div>
-                    <div className="font-semibold text-white">Включить игровой оверлей</div>
-                    <div className="text-[11px] text-slate-400 mt-0.5">
-                      Отображать важную информацию прямо поверх игры.
-                    </div>
-                  </div>
-                  <button
-                    onClick={toggleOverlayEnabled}
-                    className={`px-3 py-1.5 rounded-lg font-semibold transition-all ${
-                      isOverlayEnabled
-                        ? 'bg-purple-600 text-white shadow-md shadow-purple-600/30'
-                        : 'bg-slate-800 text-slate-400'
-                    }`}
-                  >
-                    {isOverlayEnabled ? 'ВКЛ' : 'ВЫКЛ'}
-                  </button>
+              <div className="p-6 rounded-2xl bg-slate-950 border border-slate-800 text-center space-y-3">
+                <div className="w-12 h-12 bg-slate-900 border border-slate-800 rounded-xl flex items-center justify-center mx-auto text-slate-400">
+                  <Layers className="w-6 h-6" />
+                </div>
+                <div className="font-bold text-white text-base">Оверлей в разработке</div>
+                <div className="text-xs text-slate-400 leading-relaxed max-w-sm mx-auto">
+                  Настройки и функционал игрового оверлея находятся в процессе активной разработки.
                 </div>
               </div>
             )}

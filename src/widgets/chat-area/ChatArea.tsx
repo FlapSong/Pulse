@@ -24,7 +24,7 @@ interface ChatAreaProps {
 
 export const ChatArea: React.FC<ChatAreaProps> = ({ onToggleMembers, showMembers }) => {
   const { getActiveChannel, searchQuery, setSearchQuery } = useCommunityStore();
-  const { messagesByChannel, toggleReaction, togglePinMessage, setReplyingToMessage } =
+  const { messagesByChannel, fetchChannelMessages, toggleReaction, togglePinMessage, setReplyingToMessage } =
     useChatStore();
   const { currentUser, friends } = useUserStore();
   const { connectToVoice } = useVoiceStore();
@@ -39,6 +39,15 @@ export const ChatArea: React.FC<ChatAreaProps> = ({ onToggleMembers, showMembers
   useEffect(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
   }, [messagesByChannel, activeChannel]);
+
+  useEffect(() => {
+    if (!activeChannel?.id) return;
+    fetchChannelMessages(activeChannel.id);
+    const interval = setInterval(() => {
+      fetchChannelMessages(activeChannel.id);
+    }, 1500);
+    return () => clearInterval(interval);
+  }, [activeChannel?.id, fetchChannelMessages]);
 
   if (!activeChannel) {
     return (

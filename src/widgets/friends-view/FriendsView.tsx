@@ -5,6 +5,7 @@ import {
   UserPlus,
   Clock,
   Search,
+  Phone,
   PhoneCall,
   MessageSquare,
   UserMinus,
@@ -78,18 +79,19 @@ export const FriendsView: React.FC = () => {
   const [dmAttachments, setDmAttachments] = useState<any[]>([]);
   const [isCallStageCollapsed, setIsCallStageCollapsed] = useState(false);
   const [lightboxImage, setLightboxImage] = useState<string | null>(null);
+  const [incomingCall, setIncomingCall] = useState<{ roomId: string; callerId: string; callerName: string } | null>(null);
   const dmFileInputRef = useRef<HTMLInputElement>(null);
   const messagesEndRef = useRef<HTMLDivElement>(null);
 
   // useChatStore
-  const { messagesByChannel, sendMessage, toggleReaction, activeChatUser, setActiveChatUser, incrementUnreadCount, markAsRead } = useChatStore();
+  const { messagesByChannel, sendMessage, fetchDirectMessages, toggleReaction, activeChatUser, setActiveChatUser, incrementUnreadCount, markAsRead } = useChatStore();
 
   // Auto-scroll to bottom
   useEffect(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
   }, [messagesByChannel, activeChatUser]);
 
-  // Initial & periodic sync
+  // Initial & periodic sync for friends list
   useEffect(() => {
     fetchFriendsServer();
     const interval = setInterval(() => {
@@ -98,57 +100,40 @@ export const FriendsView: React.FC = () => {
     return () => clearInterval(interval);
   }, [currentUser.username]);
 
-  // Automated reply simulation for testing direct messages
+  // Real Direct Message polling for active user chat
   useEffect(() => {
-    if (!activeChatUser) return;
-    const threadId = ['dm', currentUser.username, activeChatUser.username].sort().join('-');
-    const threadMessages = messagesByChannel[threadId] || [];
-    if (threadMessages.length === 0) return;
+    if (!activeChatUser || !currentUser.username) return;
+    
+    fetchDirectMessages(currentUser.username, activeChatUser.username);
+    const interval = setInterval(() => {
+      fetchDirectMessages(currentUser.username, activeChatUser.username);
+    }, 1500);
 
-    const lastMessage = threadMessages[threadMessages.length - 1];
-    // If the last message is from the logged-in user, simulate a reply
-    if (lastMessage.author.id === currentUser.id) {
-      const responseTimer = setTimeout(() => {
-        // Double check thread status
-        const currentMessages = useChatStore.getState().messagesByChannel[threadId] || [];
-        const lastMsgNow = currentMessages[currentMessages.length - 1];
-        if (lastMsgNow && lastMsgNow.author.id !== currentUser.id) {
-          return; // Already replied or another message arrived
+    return () => clearInterval(interval);
+  }, [activeChatUser, currentUser.username, fetchDirectMessages]);
+
+  // Incoming WebRTC Call detector
+  useEffect(() => {
+    if (!currentUser.username) return;
+    const interval = setInterval(async () => {
+      try {
+        const res = await fetch(`/api/calls/incoming?userId=${encodeURIComponent(currentUser.username)}`);
+        const data = await res.json();
+        if (data.success && Array.isArray(data.incomingCalls) && data.incomingCalls.length > 0) {
+          const call = data.incomingCalls[0];
+          if (activeVoiceChannelId !== call.roomId) {
+            setIncomingCall({
+              roomId: call.roomId,
+              callerId: call.callerId,
+              callerName: call.payload?.callerName || call.callerId
+            });
+          }
         }
+      } catch (e) {}
+    }, 1500);
 
-        const botReplies = [
-          `Привет! Рад тебя слышать! Оверлей Pulse на Alt + U работает просто супер! 🔥`,
-          `Да, я тут! Качество связи в голосовых комнатах WebRTC отличное! 📞`,
-          `Го катку прямо сейчас? Я как раз разминаюсь! 🎮`,
-          `Слышно тебя отлично! Попробуй включить шумоподавление Krisp в настройках звука!`,
-          `Зацени мой игровой статус! Рад тебя видеть онлайн!`,
-          `Игровой HUD в оверлее считывает реальные кадры в сек и пинг, мега удобная вещь! ⚡`,
-          `Привет! Как дела? Я сейчас играю, но с удовольствием потестирую с тобой функции чата!`
-        ];
-        const randomReply = botReplies[Math.floor(Math.random() * botReplies.length)];
-
-        sendMessage(threadId, {
-          id: activeChatUser.id,
-          username: activeChatUser.username,
-          displayName: activeChatUser.displayName,
-          avatar: activeChatUser.avatar,
-          status: activeChatUser.status || 'online',
-          role: activeChatUser.role || 'Gamer',
-          badge: activeChatUser.badge || 'PRO'
-        }, randomReply);
-
-        // If this chat is NOT the active one, increment unread count
-        // Note: activeChatUser check is slightly redundant here because of the initial useEffect guard,
-        // but in a real app where messages come from websockets, we'd check if (activeChatUser?.username !== sender.username)
-        const currentActive = useChatStore.getState().activeChatUser;
-        if (!currentActive || currentActive.username !== activeChatUser.username) {
-            incrementUnreadCount(threadId);
-        }
-      }, 1500);
-
-      return () => clearTimeout(responseTimer);
-    }
-  }, [activeChatUser, messagesByChannel, currentUser.id, sendMessage]);
+    return () => clearInterval(interval);
+  }, [currentUser.username, activeVoiceChannelId]);
 
   // Handle URL room connect
   useEffect(() => {
@@ -162,6 +147,20 @@ export const FriendsView: React.FC = () => {
   const handleStartCall = (friendUsername: string, friendDisplayName: string) => {
     const roomId = ['call', currentUser.username, friendUsername].sort().join('-');
     connectToVoice(roomId, `Звонок: ${friendDisplayName}`);
+
+    // Send ring signal to recipient so their client pops up incoming call modal
+    fetch('/api/calls/signal', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        roomId,
+        senderId: currentUser.username,
+        targetId: friendUsername,
+        type: 'ring',
+        payload: { callerName: currentUser.displayName || currentUser.username }
+      })
+    }).catch(() => {});
+
     const friend = friends.find((f) => f.username === friendUsername);
     if (friend) {
       setActiveChatUser(friend);
@@ -209,7 +208,7 @@ export const FriendsView: React.FC = () => {
 
     const handleSendDm = () => {
       if (!chatInput.trim() && dmAttachments.length === 0) return;
-      sendMessage(threadId, currentUser, chatInput.trim(), dmAttachments);
+      sendMessage(threadId, currentUser, chatInput.trim(), dmAttachments, undefined, activeChatUser.username);
       setChatInput('');
       setDmAttachments([]);
     };
@@ -225,7 +224,7 @@ export const FriendsView: React.FC = () => {
     };
 
     const addPresetMessage = (preset: string) => {
-      sendMessage(threadId, currentUser, preset, []);
+      sendMessage(threadId, currentUser, preset, [], undefined, activeChatUser.username);
     };
 
     const handleDmFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -1213,6 +1212,40 @@ export const FriendsView: React.FC = () => {
           </div>
         )}
       </div>
+
+      {/* Incoming Call Ringing Overlay */}
+      {incomingCall && (
+        <div className="fixed inset-0 z-50 bg-black/80 backdrop-blur-md flex items-center justify-center p-4 animate-in fade-in duration-200">
+          <div className="bg-[#121216] border border-emerald-500/40 rounded-2xl p-6 max-w-sm w-full text-center shadow-2xl shadow-emerald-500/20">
+            <div className="w-16 h-16 rounded-full bg-emerald-500/20 border-2 border-emerald-400 flex items-center justify-center mx-auto mb-4 animate-bounce">
+              <PhoneCall className="w-8 h-8 text-emerald-400" />
+            </div>
+            <h3 className="text-lg font-bold text-white mb-1">Входящий вызов</h3>
+            <p className="text-sm text-emerald-400 font-mono mb-6">
+              Пользователь @{incomingCall.callerName} вызывает вас в голосовой звонок
+            </p>
+            <div className="flex items-center gap-3 justify-center">
+              <button
+                onClick={() => {
+                  connectToVoice(incomingCall.roomId, `Звонок с @${incomingCall.callerName}`);
+                  setIncomingCall(null);
+                }}
+                className="flex-1 py-3 px-4 rounded-xl bg-emerald-500 hover:bg-emerald-400 text-black font-bold text-sm flex items-center justify-center gap-2 transition-all cursor-pointer shadow-lg shadow-emerald-500/30"
+              >
+                <Phone className="w-4 h-4" />
+                <span>Принять</span>
+              </button>
+              <button
+                onClick={() => setIncomingCall(null)}
+                className="flex-1 py-3 px-4 rounded-xl bg-rose-500/20 hover:bg-rose-500/30 border border-rose-500/40 text-rose-300 font-bold text-sm flex items-center justify-center gap-2 transition-all cursor-pointer"
+              >
+                <PhoneOff className="w-4 h-4" />
+                <span>Отклонить</span>
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 };

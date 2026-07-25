@@ -54,6 +54,9 @@ class WebRTCVoiceService {
     this.remoteAudioElement.autoplay = true;
   }
 
+  private signalPoller: any = null;
+  private lastSignalTime: number = 0;
+
   public async startVoiceSession(
     roomCode: string,
     user: { id: string; displayName: string; avatar?: string }
@@ -62,6 +65,7 @@ class WebRTCVoiceService {
     this.userId = user.id;
     this.userName = user.displayName;
     this.userAvatar = user.avatar || '';
+    this.lastSignalTime = Date.now() - 5000;
 
     // Initialize BroadcastChannel for local/multi-tab signaling
     try {
@@ -70,6 +74,10 @@ class WebRTCVoiceService {
     } catch (e) {
       console.warn('BroadcastChannel not supported, falling back to local signaling', e);
     }
+
+    // Start network polling for WebRTC signaling across devices
+    if (this.signalPoller) clearInterval(this.signalPoller);
+    this.signalPoller = setInterval(() => this.pollNetworkSignals(), 800);
 
     // Get real microphone input stream or graceful fallback
     try {
@@ -111,6 +119,35 @@ class WebRTCVoiceService {
     });
 
     return true;
+  }
+
+  private async pollNetworkSignals() {
+    if (!this.roomCode || !this.userId) return;
+    try {
+      const res = await fetch(`/api/calls/signals?roomId=${encodeURIComponent(this.roomCode)}&userId=${encodeURIComponent(this.userId)}&since=${this.lastSignalTime}`);
+      const data = await res.json();
+      if (data.success && Array.isArray(data.signals)) {
+        for (const sig of data.signals) {
+          if (sig.timestamp > this.lastSignalTime) {
+            this.lastSignalTime = sig.timestamp;
+          }
+          const msg: SignalMessage = {
+            type: sig.type,
+            roomCode: sig.roomId,
+            senderId: sig.senderId,
+            senderName: sig.payload?.senderName || sig.senderId,
+            targetId: sig.targetId,
+            sdp: sig.payload?.sdp,
+            candidate: sig.payload?.candidate,
+            isMuted: sig.payload?.isMuted
+          } as any;
+
+          await this.handleSignalMessage(msg);
+        }
+      }
+    } catch (e) {
+      // ignore
+    }
   }
 
   private setupAudioNodes() {
@@ -354,6 +391,25 @@ class WebRTCVoiceService {
     if (this.channel) {
       this.channel.postMessage(msg);
     }
+    if (this.roomCode) {
+      fetch('/api/calls/signal', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          roomId: this.roomCode,
+          senderId: this.userId,
+          targetId: (msg as any).targetId || null,
+          type: msg.type,
+          payload: {
+            senderName: this.userName,
+            avatar: this.userAvatar,
+            sdp: (msg as any).sdp,
+            candidate: (msg as any).candidate,
+            isMuted: (msg as any).isMuted
+          }
+        })
+      }).catch(() => {});
+    }
   }
 
   public setMuted(muted: boolean) {
@@ -385,6 +441,11 @@ class WebRTCVoiceService {
   }
 
   public stopVoiceSession() {
+    if (this.signalPoller) {
+      clearInterval(this.signalPoller);
+      this.signalPoller = null;
+    }
+
     if (this.animFrameId) {
       cancelAnimationFrame(this.animFrameId);
       this.animFrameId = null;
