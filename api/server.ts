@@ -1703,6 +1703,20 @@ app.post('/api/chat/direct/clear', async (req, res) => {
       'DELETE FROM direct_messages WHERE (LOWER(sender_id) = ? AND LOWER(recipient_id) = ?) OR (LOWER(sender_id) = ? AND LOWER(recipient_id) = ?)',
       [cleanCurrent, cleanTarget, cleanTarget, cleanCurrent]
     );
+
+    // Also delete from Firestore if connected
+    if (db) {
+      const threadIds = [
+        ['dm', cleanCurrent, cleanTarget].sort().join('-'),
+        ['dm', cleanTarget, cleanCurrent].sort().join('-')
+      ];
+      // Firestore 'in' query supports up to 30 elements, we only have 2
+      const snapshot = await db.collection('direct_messages').where('thread_id', 'in', threadIds).get();
+      for (const doc of snapshot.docs) {
+        await doc.ref.delete();
+      }
+    }
+
     res.json({ success: true, message: 'История чата успешно очищена' });
   } catch (err: any) {
     res.status(500).json({ success: false, error: err.message });
