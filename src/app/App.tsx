@@ -28,7 +28,7 @@ import { EyeOff } from 'lucide-react';
 export default function App() {
   const { activeTab } = useCommunityStore();
   const { isOverlayOpen, crosshairEnabled, fpsWidgetEnabled, performanceMetrics, updatePerformanceMetrics } = useGameStore();
-  const { fetchFriendsServer, isAuthenticated, isStreamerModeActive, toggleStreamerMode, muteMicHotkey, deafenHotkey } = useUserStore();
+  const { fetchFriendsServer, searchUsersServer, updateUserStatusServer, isAuthenticated, isStreamerModeActive, toggleStreamerMode, muteMicHotkey, deafenHotkey } = useUserStore();
   const [showMembers, setShowMembers] = useState(true);
 
   // 1. Mock OBS detection
@@ -67,12 +67,14 @@ export default function App() {
     return () => window.removeEventListener('keydown', handleKeyDown);
   }, [muteMicHotkey, deafenHotkey]);
 
-  // Fetch friends on initial load if authenticated
+  // Fetch friends and user list on initial load if authenticated
   useEffect(() => {
     if (isAuthenticated) {
       fetchFriendsServer();
+      searchUsersServer('');
+      updateUserStatusServer('online');
     }
-  }, [isAuthenticated, fetchFriendsServer]);
+  }, [isAuthenticated, fetchFriendsServer, searchUsersServer, updateUserStatusServer]);
 
   // Real-time Performance Tracking Engine
   useEffect(() => {

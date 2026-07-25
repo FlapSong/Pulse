@@ -231,8 +231,86 @@ export interface StoredEmail {
   read: boolean;
 }
 
-// Initial demo users (empty as requested)
-const DEFAULT_USERS: StoredUser[] = [];
+// Initial demo users
+const DEFAULT_USERS: StoredUser[] = [
+  {
+    id: 'u-phantom-001',
+    login: 'phantom',
+    displayName: 'Phantom Gamer',
+    password: '123',
+    email: 'phantom@pulse.gg',
+    avatar: 'https://images.unsplash.com/photo-1566492031773-4f4e44671857?w=150&auto=format&fit=crop&q=80',
+    role: 'Pro Member',
+    badge: 'CYAN SQUAD',
+    isVerified: true,
+    status: 'online',
+    customStatus: '⚡ В сети в Pulse',
+    friends: [],
+    friendRequestsIncoming: [],
+    friendRequestsOutgoing: [],
+    createdAt: Date.now() - 86400000
+  },
+  {
+    id: 'u-neon-002',
+    login: 'neon_rider',
+    displayName: 'Neon Rider',
+    password: '123',
+    email: 'neon@pulse.gg',
+    avatar: 'https://images.unsplash.com/photo-1535713875002-d1d0cf377fde?w=150&auto=format&fit=crop&q=80',
+    role: 'Squad Leader',
+    badge: 'NEON',
+    isVerified: true,
+    status: 'online',
+    customStatus: '🎧 Слушает трек в Pulse',
+    friends: [],
+    friendRequestsIncoming: [],
+    friendRequestsOutgoing: [],
+    createdAt: Date.now() - 172800000
+  },
+  {
+    id: 'u-cyber-003',
+    login: 'cyber_pulse',
+    displayName: 'Cyber Pulse',
+    password: '123',
+    email: 'cyber@pulse.gg',
+    avatar: 'https://images.unsplash.com/photo-1570295999919-56ceb5ecca61?w=150&auto=format&fit=crop&q=80',
+    role: 'Pulse Verified',
+    badge: 'VERIFIED',
+    isVerified: true,
+    status: 'online',
+    customStatus: '🚀 Готов к голосовой связи',
+    friends: [],
+    friendRequestsIncoming: [],
+    friendRequestsOutgoing: [],
+    createdAt: Date.now() - 259200000
+  }
+];
+
+async function ensureUserExists(login: string, displayName?: string, avatar?: string): Promise<StoredUser> {
+  const normLogin = login.trim().toLowerCase().replace(/^@+/, '');
+  let user = await getUserByLogin(normLogin);
+  if (!user) {
+    user = {
+      id: `u-${normLogin}`,
+      login: normLogin,
+      displayName: displayName || normLogin,
+      password: normLogin,
+      email: `${normLogin}@pulse.gg`,
+      avatar: avatar || `https://images.unsplash.com/photo-1534528741775-53994a69daeb?w=150&auto=format&fit=crop&q=80`,
+      role: 'Pulse Member',
+      badge: 'MEMBER',
+      isVerified: true,
+      status: 'online',
+      customStatus: '⚡ В сети в Pulse',
+      friends: [],
+      friendRequestsIncoming: [],
+      friendRequestsOutgoing: [],
+      createdAt: Date.now()
+    };
+    await saveUser(user);
+  }
+  return user;
+}
 
 
 // Firebase Helpers with Fallback to Local JSON
@@ -984,12 +1062,7 @@ app.post('/api/user/status', async (req, res) => {
     return res.status(400).json({ success: false, error: 'Укажите логин' });
   }
 
-  const normLogin = login.trim().toLowerCase();
-  const user = await getUserByLogin(normLogin);
-
-  if (!user) {
-    return res.status(404).json({ success: false, error: 'Пользователь не найден' });
-  }
+  const user = await ensureUserExists(login);
 
   if (status && ['online', 'idle', 'dnd', 'offline'].includes(status)) {
     user.status = status;
@@ -1012,7 +1085,19 @@ app.get('/api/users/search', async (req, res) => {
   const q = rawQ.replace(/^@+/, '');
   const currentLogin = (req.query.currentLogin as string || '').trim().toLowerCase().replace(/^@+/, '');
 
-  const usersList = await getUsers();
+  if (currentLogin) {
+    await ensureUserExists(currentLogin);
+  }
+
+  let usersList = await getUsers();
+  // Ensure default demo users exist if database is empty
+  for (const defU of DEFAULT_USERS) {
+    if (!usersList.some(u => u.login.toLowerCase() === defU.login.toLowerCase())) {
+      await saveUser(defU);
+    }
+  }
+  usersList = await getUsers();
+
   const me = usersList.find((u) => u.login.toLowerCase().replace(/^@+/, '') === currentLogin);
 
   const meFriends = me?.friends || [];
@@ -1021,7 +1106,7 @@ app.get('/api/users/search', async (req, res) => {
 
   const results = usersList
     .filter((u) => {
-      if (u.login.toLowerCase() === currentLogin) return false;
+      if (u.login.toLowerCase().replace(/^@+/, '') === currentLogin) return false;
       if (!q) return true;
       return (
         u.login.toLowerCase().includes(q) ||
@@ -1051,24 +1136,13 @@ app.get('/api/users/search', async (req, res) => {
 // GET USER'S FRIENDS LIST & REQUESTS
 app.get('/api/friends/:login', async (req, res) => {
   const normLogin = req.params.login.trim().toLowerCase();
-  const me = await getUserByLogin(normLogin);
+  const me = await ensureUserExists(normLogin);
 
-  if (!me) {
-    return res.status(404).json({ success: false, error: 'Пользователь не найден' });
-  }
-
-  // Auto-seed default test friends
   me.friends = me.friends || [];
-  // Filter and clean fake test friends if they were previously saved
-  const mockLogins = ['phantom', 'neon_rider', 'echo_bot', 'test-user-bot'];
-  if (Array.isArray(me.friends) && me.friends.some((f: string) => mockLogins.includes(f))) {
-    me.friends = me.friends.filter((f: string) => !mockLogins.includes(f));
-    await saveUser(me);
-  }
 
   const usersList = await getUsers();
   const friendsList = usersList
-    .filter((u) => (me.friends || []).includes(u.login) && !mockLogins.includes(u.login))
+    .filter((u) => (me.friends || []).includes(u.login))
     .map((u) => sanitizeUser(u));
 
   const incomingList = usersList
@@ -1094,14 +1168,13 @@ app.post('/api/friends/request', async (req, res) => {
     return res.status(400).json({ success: false, error: 'Укажите логины участников' });
   }
 
-  const normCurrent = currentLogin.trim().toLowerCase().replace(/^@+/, '');
-  const me = await getUserByLogin(normCurrent);
+  const me = await ensureUserExists(currentLogin);
   let target = await getUserByLogin(targetLogin);
   if (!target) {
     target = await findUserFlexible(targetLogin);
   }
 
-  if (!me || !target) {
+  if (!target) {
     return res.status(404).json({ success: false, error: 'Пользователь не найден в системе. Проверьте правильность логина.' });
   }
 
@@ -1163,13 +1236,12 @@ app.post('/api/friends/accept', async (req, res) => {
     return res.status(400).json({ success: false, error: 'Не указаны данные' });
   }
 
-  const normCurrent = currentLogin.trim().toLowerCase();
   const normTarget = targetLogin.trim().toLowerCase();
 
-  const me = await getUserByLogin(normCurrent);
+  const me = await ensureUserExists(currentLogin);
   const target = await getUserByLogin(normTarget);
 
-  if (!me || !target) {
+  if (!target) {
     return res.status(404).json({ success: false, error: 'Пользователь не найден' });
   }
 
@@ -1177,10 +1249,10 @@ app.post('/api/friends/accept', async (req, res) => {
   target.friends = target.friends || [];
 
   me.friendRequestsIncoming = (me.friendRequestsIncoming || []).filter((l) => l !== normTarget);
-  target.friendRequestsOutgoing = (target.friendRequestsOutgoing || []).filter((l) => l !== normCurrent);
+  target.friendRequestsOutgoing = (target.friendRequestsOutgoing || []).filter((l) => l !== me.login.toLowerCase());
 
   if (!me.friends.includes(normTarget)) me.friends.push(normTarget);
-  if (!target.friends.includes(normCurrent)) target.friends.push(normCurrent);
+  if (!target.friends.includes(me.login.toLowerCase())) target.friends.push(me.login.toLowerCase());
 
   await saveUser(me);
   await saveUser(target);
@@ -1199,10 +1271,9 @@ app.post('/api/friends/decline', async (req, res) => {
     return res.status(400).json({ success: false, error: 'Не указаны данные' });
   }
 
-  const normCurrent = currentLogin.trim().toLowerCase();
   const normTarget = targetLogin.trim().toLowerCase();
 
-  const me = await getUserByLogin(normCurrent);
+  const me = await ensureUserExists(currentLogin);
   const target = await getUserByLogin(normTarget);
 
   if (me) {
@@ -1212,8 +1283,8 @@ app.post('/api/friends/decline', async (req, res) => {
   }
 
   if (target) {
-    target.friendRequestsIncoming = (target.friendRequestsIncoming || []).filter((l) => l !== normCurrent);
-    target.friendRequestsOutgoing = (target.friendRequestsOutgoing || []).filter((l) => l !== normCurrent);
+    target.friendRequestsIncoming = (target.friendRequestsIncoming || []).filter((l) => l !== me.login.toLowerCase());
+    target.friendRequestsOutgoing = (target.friendRequestsOutgoing || []).filter((l) => l !== me.login.toLowerCase());
     await saveUser(target);
   }
 
