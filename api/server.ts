@@ -1699,19 +1699,23 @@ app.post('/api/chat/direct/clear', async (req, res) => {
   try {
     const cleanCurrent = currentUsername.toLowerCase();
     const cleanTarget = targetUsername.toLowerCase();
-    await execSql(
+    console.log(`Clearing chat between ${cleanCurrent} and ${cleanTarget}`);
+    const result = await execSql(
       'DELETE FROM direct_messages WHERE (LOWER(sender_id) = ? AND LOWER(recipient_id) = ?) OR (LOWER(sender_id) = ? AND LOWER(recipient_id) = ?)',
       [cleanCurrent, cleanTarget, cleanTarget, cleanCurrent]
     );
+    console.log('SQLite delete result:', result);
 
     // Also delete from Firestore if connected
     if (db) {
+      console.log('Firestore connected, deleting from Firestore...');
       const threadIds = [
         ['dm', cleanCurrent, cleanTarget].sort().join('-'),
         ['dm', cleanTarget, cleanCurrent].sort().join('-')
       ];
       // Firestore 'in' query supports up to 30 elements, we only have 2
       const snapshot = await db.collection('direct_messages').where('thread_id', 'in', threadIds).get();
+      console.log(`Found ${snapshot.docs.length} docs in Firestore`);
       for (const doc of snapshot.docs) {
         await doc.ref.delete();
       }

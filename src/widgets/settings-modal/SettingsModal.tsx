@@ -416,7 +416,7 @@ export const SettingsModal: React.FC = () => {
           )}
 
           <div className="mt-auto pt-4 border-t border-slate-800 px-2 text-[10px] text-slate-500 font-mono">
-            Pulse Desktop v2.0.0
+            Pulse Desktop v2.1
           </div>
         </div>
 
