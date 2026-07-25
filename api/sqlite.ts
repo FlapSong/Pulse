@@ -57,6 +57,13 @@ function initTables(db: Database) {
       PRIMARY KEY (user_id, friend_id)
     );
 
+    CREATE TABLE IF NOT EXISTS blocked_users (
+      blocker_id TEXT NOT NULL,
+      blocked_id TEXT NOT NULL,
+      timestamp INTEGER,
+      PRIMARY KEY (blocker_id, blocked_id)
+    );
+
     CREATE TABLE IF NOT EXISTS call_signals (
       id TEXT PRIMARY KEY,
       room_id TEXT NOT NULL,
@@ -75,6 +82,12 @@ function initTables(db: Database) {
       used INTEGER DEFAULT 0
     );
   `);
+
+  try {
+    db.run("ALTER TABLE direct_messages ADD COLUMN reactions TEXT;");
+  } catch (e) {
+    // Column already exists or table doesn't exist yet, ignore
+  }
 }
 
 export async function getSqliteDb(): Promise<Database> {

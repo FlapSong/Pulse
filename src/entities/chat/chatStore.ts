@@ -2,6 +2,9 @@ import { create } from 'zustand';
 import { Message, User } from '../../shared/types';
 import { INITIAL_MESSAGES } from '../../shared/config/initialData';
 import { soundService } from '../../shared/services/soundService';
+import { useUserStore } from '../user/userStore';
+import { useGameStore } from '../game/gameStore';
+import { API_BASE } from '../../shared/api/config';
 
 interface ChatStore {
   messagesByChannel: Record<string, Message[]>;
@@ -12,11 +15,14 @@ interface ChatStore {
 
   fetchChannelMessages: (channelId: string) => Promise<void>;
   fetchDirectMessages: (senderUsername: string, recipientUsername: string) => Promise<void>;
+  pollAllDirectMessages: (currentUsername: string, isCurrentTabDm: boolean) => Promise<void>;
+  clearDirectMessagesServer: (threadId: string, currentUsername: string, targetUsername: string) => Promise<void>;
+  simulateIncomingMessage: (recipientUsername: string, botName?: string, messageText?: string) => Promise<void>;
   sendMessage: (channelId: string, author: User, content: string, attachments?: any[], replyTo?: Message['replyTo'], recipientUsername?: string) => Promise<void>;
   incrementUnreadCount: (channelId: string) => void;
   markAsRead: (channelId: string) => void;
   setActiveChatUser: (user: User | null) => void;
-  toggleReaction: (channelId: string, messageId: string, emoji: string, userId: string) => void;
+  toggleReaction: (channelId: string, messageId: string, emoji: string, userId: string) => Promise<void>;
   togglePinMessage: (channelId: string, messageId: string) => void;
   setReplyingToMessage: (message: Message | null) => void;
   setPinnedFilterActive: (active: boolean) => void;
@@ -59,7 +65,7 @@ export const useChatStore = create<ChatStore>((set, get) => ({
             // Sound notification for new incoming messages
             const lastPrev = prev[prev.length - 1];
             const lastNew = data.messages[data.messages.length - 1];
-            if (lastNew && lastPrev && lastNew.id !== lastPrev.id && lastNew.author?.username !== senderUsername) {
+            if (lastNew && lastPrev && lastNew.id !== lastPrev.id && lastNew.author?.username?.toLowerCase() !== senderUsername.toLowerCase()) {
               soundService.playMessage();
             }
           }
@@ -76,6 +82,127 @@ export const useChatStore = create<ChatStore>((set, get) => ({
     }
   },
 
+  pollAllDirectMessages: async (currentUsername: string, isCurrentTabDm: boolean) => {
+    if (!currentUsername) return;
+    try {
+      const res = await fetch(`/api/chat/direct/all?username=${encodeURIComponent(currentUsername)}`);
+      const data = await res.json();
+      if (data.success && data.messagesByThread) {
+        set((state) => {
+          const updatedMessagesByChannel = { ...state.messagesByChannel };
+          const updatedUnreadCounts = { ...state.unreadCounts };
+          let shouldPlaySound = false;
+
+          Object.entries(data.messagesByThread as Record<string, Message[]>).forEach(([threadId, rawMsgs]) => {
+            const newMsgs = rawMsgs.filter(m => !m.content.includes('тестовое') && !m.content.includes('симулированное'));
+            const isDev = useGameStore.getState().isDevMode;
+            const TEST_LOGINS = ['phantom', 'cyber_friend', 'pro_gamer_777', 'speed_demon', 'shadow_ninja', 'aim_master', 'neon_pulse'];
+            
+            // Filter out threads from test users if not in dev mode
+            if (!isDev) {
+              const otherUser = threadId.split('-').find(u => u !== 'dm' && u !== currentUsername.toLowerCase());
+              if (otherUser && TEST_LOGINS.includes(otherUser)) {
+                return;
+              }
+            }
+
+            const prevMsgs = state.messagesByChannel[threadId];
+            const isFirstFetchForThread = prevMsgs === undefined;
+            const prevMsgsArr = prevMsgs || [];
+
+            if (newMsgs.length > prevMsgsArr.length) {
+              const freshMsgs = newMsgs.slice(prevMsgsArr.length);
+              const incomingFresh = freshMsgs.filter(
+                (m) => m.author?.username?.toLowerCase() !== currentUsername.toLowerCase()
+              );
+
+              if (incomingFresh.length > 0) {
+                if (!isFirstFetchForThread) {
+                  shouldPlaySound = true;
+                }
+
+                const activeDmUsername = state.activeChatUser?.username?.toLowerCase();
+                const isChattingWithThisSender =
+                  isCurrentTabDm &&
+                  activeDmUsername &&
+                  threadId.toLowerCase().includes(activeDmUsername);
+
+                if (!isChattingWithThisSender) {
+                  if (isFirstFetchForThread) {
+                    const unreadCount = incomingFresh.filter(m => !(m as any).readStatus).length;
+                    updatedUnreadCounts[threadId] = unreadCount;
+                  } else {
+                    updatedUnreadCounts[threadId] = (updatedUnreadCounts[threadId] || 0) + incomingFresh.length;
+                  }
+                }
+              }
+            }
+
+            updatedMessagesByChannel[threadId] = newMsgs;
+          });
+
+          if (shouldPlaySound) {
+            soundService.playMessage();
+          }
+
+          return {
+            messagesByChannel: updatedMessagesByChannel,
+            unreadCounts: updatedUnreadCounts
+          };
+        });
+      }
+    } catch (e) {
+      console.warn('Failed to poll all direct messages:', e);
+    }
+  },
+
+  clearDirectMessagesServer: async (threadId: string, currentUsername: string, targetUsername: string) => {
+    try {
+      const res = await fetch(API_BASE + '/api/chat/direct/clear', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ currentUsername, targetUsername })
+      });
+      const data = await res.json();
+      if (data.success) {
+        set((state) => ({
+          messagesByChannel: {
+            ...state.messagesByChannel,
+            [threadId]: []
+          }
+        }));
+      } else {
+        console.error('Failed to clear direct messages (server error):', data.error);
+      }
+    } catch (e) {
+      console.error('Failed to clear direct messages:', e);
+    }
+  },
+
+  simulateIncomingMessage: async (recipientUsername: string, botName?: string, messageText?: string) => {
+    if (!recipientUsername) return;
+    const senderUsername = botName ? botName.toLowerCase().replace(/\s+/g, '_') : 'cyber_friend';
+    const content = messageText || 'Привет! 👋 Это симулированное тестовое сообщение для проверки звука уведомления, аватарки на боковой панели и счетчика!';
+
+    try {
+      await fetch(API_BASE + '/api/chat/direct', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          senderUsername,
+          recipientUsername,
+          content,
+          attachments: []
+        })
+      });
+
+      // Instantly poll to trigger state updates & sounds
+      await get().pollAllDirectMessages(recipientUsername, false);
+    } catch (e) {
+      console.error('Failed to simulate incoming message:', e);
+    }
+  },
+
   sendMessage: async (channelId, author, content, attachments = [], replyTo, recipientUsername) => {
     const newMessage: Message = {
       id: `m-${Date.now()}`,
@@ -88,8 +215,8 @@ export const useChatStore = create<ChatStore>((set, get) => ({
       reactions: []
     };
 
-    // Play sleek custom UI message notification sound
-    soundService.playMessage();
+    // NOTE: Sound is ONLY played for INCOMING messages from other users per specification.
+    // Sending our own message is silent.
 
     set((state) => {
       const currentList = state.messagesByChannel[channelId] || [];
@@ -106,7 +233,7 @@ export const useChatStore = create<ChatStore>((set, get) => ({
     try {
       if (recipientUsername) {
         // Direct Message to another real user
-        await fetch('/api/chat/direct', {
+        await fetch(API_BASE + '/api/chat/direct', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
@@ -119,7 +246,7 @@ export const useChatStore = create<ChatStore>((set, get) => ({
         });
       } else {
         // Channel Message
-        await fetch('/api/chat/messages', {
+        await fetch(API_BASE + '/api/chat/messages', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
@@ -153,9 +280,23 @@ export const useChatStore = create<ChatStore>((set, get) => ({
     });
   },
 
-  setActiveChatUser: (user) => set({ activeChatUser: user }),
+  setActiveChatUser: (user) => {
+    set((state) => {
+      if (user) {
+        // Automatically clear unread badge for this friend's direct message thread
+        const currentUsername = useUserStore.getState().currentUser?.username;
+        if (currentUsername && user.username) {
+          const threadId = ['dm', currentUsername, user.username].sort().join('-');
+          const newCounts = { ...state.unreadCounts };
+          delete newCounts[threadId];
+          return { activeChatUser: user, unreadCounts: newCounts };
+        }
+      }
+      return { activeChatUser: user };
+    });
+  },
 
-  toggleReaction: (channelId, messageId, emoji, userId) => {
+  toggleReaction: async (channelId, messageId, emoji, userId) => {
     set((state) => {
       const channelMessages = state.messagesByChannel[channelId] || [];
       const updatedMessages = channelMessages.map((msg) => {
@@ -210,6 +351,16 @@ export const useChatStore = create<ChatStore>((set, get) => ({
         }
       };
     });
+
+    try {
+      await fetch(API_BASE + '/api/chat/reaction', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ channelId, messageId, emoji, userId })
+      });
+    } catch (e) {
+      console.warn('Failed to save reaction on server:', e);
+    }
   },
 
   togglePinMessage: (channelId, messageId) => {

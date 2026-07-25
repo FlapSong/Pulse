@@ -20,7 +20,7 @@ export const QuickSwitcher: React.FC = () => {
   const [query, setQuery] = useState('');
 
   const { communities, setActiveCommunity, setActiveChannel, setActiveTab } = useCommunityStore();
-  const { setSettingsOpen, toggleOverlay } = useGameStore();
+  const { setSettingsOpen } = useGameStore();
 
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
@@ -95,20 +95,6 @@ export const QuickSwitcher: React.FC = () => {
               <div className="flex items-center gap-2.5">
                 <Settings className="w-4 h-4 text-indigo-400" />
                 <span>Open Platform Settings</span>
-              </div>
-              <ArrowRight className="w-3.5 h-3.5 text-slate-500" />
-            </button>
-
-            <button
-              onClick={() => {
-                toggleOverlay();
-                setIsOpen(false);
-              }}
-              className="w-full p-2.5 rounded-xl hover:bg-slate-800/80 text-left flex items-center justify-between text-xs text-slate-200 transition-all"
-            >
-              <div className="flex items-center gap-2.5">
-                <Zap className="w-4 h-4 text-purple-400" />
-                <span>Toggle Game HUD Overlay (Alt+U)</span>
               </div>
               <ArrowRight className="w-3.5 h-3.5 text-slate-500" />
             </button>

@@ -2,11 +2,24 @@
 // Generates beautiful, retro-futuristic sound effects dynamically in-browser.
 // Automatically respects the user's "Do Not Disturb" (dnd) status.
 
-import { useUserStore } from '../../entities/user/userStore';
-
 class SoundService {
   private ctx: AudioContext | null = null;
   private ringInterval: any = null;
+  private userStatus: string = 'online';
+  private customStatus: string = '';
+
+  public setUserStatus(status: string, customStatus?: string) {
+    this.userStatus = status;
+    if (customStatus !== undefined) {
+      this.customStatus = customStatus;
+    }
+  }
+
+  public resumeAudio() {
+    if (this.ctx && this.ctx.state === 'suspended') {
+      this.ctx.resume();
+    }
+  }
 
   private initCtx() {
     if (!this.ctx) {
@@ -21,14 +34,12 @@ class SoundService {
   }
 
   private shouldPlay(): boolean {
-    try {
-      const state = useUserStore.getState();
-      const currentUser = state?.currentUser;
-      if (currentUser && currentUser.status === 'dnd') {
-        return false;
-      }
-    } catch (e) {
-      // safe fallback
+    if (this.userStatus === 'dnd') return false;
+    if (this.customStatus && (
+      this.customStatus.toLowerCase().includes('не беспокоить') ||
+      this.customStatus.toLowerCase().includes('dnd')
+    )) {
+      return false;
     }
     return true;
   }
@@ -37,7 +48,6 @@ class SoundService {
    * Play a premium high-quality sci-fi message notification ping
    */
   public playMessage() {
-    if (!this.shouldPlay()) return;
     this.initCtx();
     if (!this.ctx) return;
 

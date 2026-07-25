@@ -1,10 +1,9 @@
-import React, { useEffect, useState, useRef } from 'react';
+import React, { useEffect, useState, useRef, useMemo } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
 import {
   X,
   Volume2,
   Mic,
-  Monitor,
   Key,
   EyeOff,
   Activity,
@@ -15,7 +14,9 @@ import {
   ChevronDown,
   Globe,
   Server,
-  Layers
+  Terminal,
+  Lock,
+  Unlock
 } from 'lucide-react';
 import { useGameStore } from '../../entities/game/gameStore';
 import { useVoiceStore } from '../../entities/voice/voiceStore';
@@ -84,8 +85,6 @@ const StyledSelect = ({
 export const SettingsModal: React.FC = () => {
   const { 
     logout, 
-    isStreamerModeActive, 
-    toggleStreamerMode, 
     muteMicHotkey, 
     setMuteMicHotkey,
     deafenHotkey,
@@ -131,10 +130,114 @@ export const SettingsModal: React.FC = () => {
     activeSettingsTab,
     setActiveSettingsTab,
     performanceMetrics,
-    isOverlayEnabled,
-    toggleOverlayEnabled
+    isDevMode,
+    setDevMode,
+    setShowDevModeTransition
   } = useGameStore();
   const [apiUrl, setApiUrl] = useState(localStorage.getItem('PULSE_API_BASE') || '');
+
+  const [isEnteringDevPass, setIsEnteringDevPass] = useState(false);
+  const [devPassword, setDevPassword] = useState('');
+  const [devPasswordError, setDevPasswordError] = useState(false);
+
+  const handleDevSubmit = (e?: React.FormEvent) => {
+    if (e) e.preventDefault();
+    if (devPassword === '0101') {
+      setShowDevModeTransition(true);
+      setIsEnteringDevPass(false);
+      setDevPassword('');
+      setDevPasswordError(false);
+      setSettingsOpen(false); // close settings to show transition
+    } else {
+      setDevPasswordError(true);
+      setDevPassword('');
+    }
+  };
+
+  const systemInfo = useMemo(() => {
+    if (typeof window === 'undefined') return {
+      os: 'Не определено',
+      browser: 'Не определено',
+      cpuCores: 'N/A',
+      deviceMemory: 'N/A',
+      gpu: 'WebGL не поддерживается',
+      resolution: 'N/A',
+      connection: 'Прямое соединение',
+      hwAcceleration: 'Выключено'
+    };
+
+    const ua = navigator.userAgent;
+    
+    // OS detection
+    let os = 'Unknown OS';
+    if (ua.indexOf('Win') !== -1) os = 'Windows';
+    else if (ua.indexOf('Mac') !== -1) os = 'macOS';
+    else if (ua.indexOf('X11') !== -1) os = 'UNIX';
+    else if (ua.indexOf('Linux') !== -1) os = 'Linux';
+    else if (/Android/.test(ua)) os = 'Android';
+    else if (/iPhone|iPad|iPod/.test(ua)) os = 'iOS';
+
+    // Browser detection
+    let browser = 'Unknown Browser';
+    if (ua.indexOf('Chrome') !== -1 && ua.indexOf('Edg') === -1) browser = 'Google Chrome';
+    else if (ua.indexOf('Safari') !== -1 && ua.indexOf('Chrome') === -1) browser = 'Safari';
+    else if (ua.indexOf('Firefox') !== -1) browser = 'Mozilla Firefox';
+    else if (ua.indexOf('Edg') !== -1) browser = 'Microsoft Edge';
+    else if (ua.indexOf('OPR') !== -1 || ua.indexOf('Opera') !== -1) browser = 'Opera';
+
+    // CPU Cores
+    const cpuCores = navigator.hardwareConcurrency ? `${navigator.hardwareConcurrency} Cores` : 'N/A';
+
+    // Device Memory
+    const deviceMemory = (navigator as any).deviceMemory ? `${(navigator as any).deviceMemory} GB` : 'N/A';
+
+    // GPU Info (WebGL)
+    let gpu = 'WebGL Generic';
+    let hwAcceleration = 'Выключено';
+    try {
+      const canvas = document.createElement('canvas');
+      const gl = (canvas.getContext('webgl') || canvas.getContext('experimental-webgl')) as WebGLRenderingContext | null;
+      if (gl) {
+        hwAcceleration = 'Включено (WebGL)';
+        const debugInfo = gl.getExtension('WEBGL_debug_renderer_info');
+        if (debugInfo) {
+          const renderer = gl.getParameter(debugInfo.UNMASKED_RENDERER_WEBGL);
+          if (renderer) {
+            gpu = renderer;
+            // Shorten/format typical GPU strings for clean UI
+            if (gpu.includes('ANGLE (')) {
+              const match = gpu.match(/ANGLE \(([^,]+), ([^,]+)/);
+              if (match) {
+                gpu = match[2];
+              }
+            }
+          }
+        }
+      }
+    } catch (e) {
+      gpu = 'Ошибка определения';
+    }
+
+    // Screen resolution
+    const resolution = `${window.screen.width}x${window.screen.height} (@${window.devicePixelRatio}x)`;
+
+    // Network connection
+    const conn = (navigator as any).connection || (navigator as any).mozConnection || (navigator as any).webkitConnection;
+    const connection = conn 
+      ? `${(conn.effectiveType || '').toUpperCase()} (rtt: ${conn.rtt || '?'}ms, speed: ${conn.downlink || '?'}Mbps)`
+      : 'Локальное / Локальная сеть';
+
+    return {
+      os,
+      browser,
+      cpuCores,
+      deviceMemory,
+      gpu,
+      resolution,
+      connection,
+      hwAcceleration
+    };
+  }, []);
 
   const saveApiUrl = (url: string) => {
     setApiUrl(url);
@@ -194,18 +297,6 @@ export const SettingsModal: React.FC = () => {
           </button>
 
           <button
-            onClick={() => setActiveSettingsTab('overlay')}
-            className={`w-full p-2.5 rounded-xl text-xs font-semibold flex items-center gap-2.5 transition-all text-left ${
-              activeSettingsTab === 'overlay'
-                ? 'bg-purple-600/20 text-purple-300 border border-purple-500/30'
-                : 'text-slate-400 hover:text-white hover:bg-slate-900'
-            }`}
-          >
-            <Monitor className="w-4 h-4 text-purple-400" />
-            <span>Игровой оверлей</span>
-          </button>
-
-          <button
             onClick={() => setActiveSettingsTab('hotkeys')}
             className={`w-full p-2.5 rounded-xl text-xs font-semibold flex items-center gap-2.5 transition-all text-left ${
               activeSettingsTab === 'hotkeys'
@@ -215,18 +306,6 @@ export const SettingsModal: React.FC = () => {
           >
             <Key className="w-4 h-4 text-emerald-400" />
             <span>Горячие клавиши</span>
-          </button>
-
-          <button
-            onClick={() => setActiveSettingsTab('streamer')}
-            className={`w-full p-2.5 rounded-xl text-xs font-semibold flex items-center gap-2.5 transition-all text-left ${
-              activeSettingsTab === 'streamer'
-                ? 'bg-rose-600/20 text-rose-300 border border-rose-500/30'
-                : 'text-slate-400 hover:text-white hover:bg-slate-900'
-            }`}
-          >
-            <EyeOff className="w-4 h-4 text-rose-400" />
-            <span>Режим стримера</span>
           </button>
 
           <button
@@ -242,18 +321,6 @@ export const SettingsModal: React.FC = () => {
           </button>
 
           <button
-            onClick={() => setActiveSettingsTab('network')}
-            className={`w-full p-2.5 rounded-xl text-xs font-semibold flex items-center gap-2.5 transition-all text-left ${
-              activeSettingsTab === 'network'
-                ? 'bg-blue-600/20 text-blue-300 border border-blue-500/30'
-                : 'text-slate-400 hover:text-white hover:bg-slate-900'
-            }`}
-          >
-            <Globe className="w-4 h-4 text-blue-400" />
-            <span>Сетевые настройки</span>
-          </button>
-
-          <button
             onClick={() => {
               setSettingsOpen(false);
               logout();
@@ -263,6 +330,90 @@ export const SettingsModal: React.FC = () => {
             <LogOut className="w-4 h-4 text-rose-400" />
             <span>Выйти из аккаунта</span>
           </button>
+
+          {/* Developer Mode Control Section */}
+          {isDevMode ? (
+            <div className="mt-2 p-2 bg-emerald-500/10 border border-emerald-500/20 rounded-xl flex flex-col gap-1.5">
+              <div className="flex items-center gap-2 text-emerald-400 font-bold text-[10px] uppercase tracking-wider">
+                <Terminal className="w-3.5 h-3.5 text-emerald-400" />
+                <span>Режим разработчика</span>
+              </div>
+              <button
+                onClick={async () => {
+                  const { simulateFriendRequestServer } = useUserStore.getState();
+                  await simulateFriendRequestServer();
+                }}
+                className="w-full py-1.5 bg-[#22D3EE]/15 hover:bg-[#22D3EE]/25 text-[#22D3EE] rounded-lg text-[10px] font-bold border border-[#22D3EE]/30 cursor-pointer text-center transition-all flex items-center justify-center gap-1.5"
+              >
+                <Sparkles className="w-3.5 h-3.5 shrink-0" />
+                <span>Тестовая заявка</span>
+              </button>
+              <button
+                onClick={() => setDevMode(false)}
+                className="w-full py-1.5 bg-rose-500/10 hover:bg-rose-500/20 text-rose-400 rounded-lg text-[10px] font-bold border border-rose-500/20 cursor-pointer text-center transition-all"
+              >
+                Отключить режим
+              </button>
+            </div>
+          ) : (
+            <div className="mt-2">
+              {!isEnteringDevPass ? (
+                <button
+                  onClick={() => setIsEnteringDevPass(true)}
+                  className="w-full p-2.5 rounded-xl text-xs font-semibold flex items-center gap-2.5 text-slate-400 hover:text-white hover:bg-slate-900 transition-all text-left cursor-pointer"
+                >
+                  <Terminal className="w-4 h-4 text-slate-400" />
+                  <span>Режим разработчика</span>
+                </button>
+              ) : (
+                <form onSubmit={handleDevSubmit} className="p-2 bg-slate-950 rounded-xl border border-slate-800 space-y-2">
+                  <div className="flex items-center justify-between text-[10px] font-bold text-slate-400 uppercase tracking-wider">
+                    <span>Пароль</span>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setIsEnteringDevPass(false);
+                        setDevPassword('');
+                        setDevPasswordError(false);
+                      }}
+                      className="text-slate-500 hover:text-slate-300 text-[9px]"
+                    >
+                      Отмена
+                    </button>
+                  </div>
+                  <div className="relative">
+                    <input
+                      type="password"
+                      value={devPassword}
+                      onChange={(e) => {
+                        setDevPassword(e.target.value);
+                        setDevPasswordError(false);
+                      }}
+                      placeholder="••••"
+                      maxLength={10}
+                      autoFocus
+                      className={`w-full bg-slate-900 border text-xs text-center py-1.5 rounded-lg text-white font-mono focus:outline-none transition-all ${
+                        devPasswordError
+                          ? 'border-rose-500 bg-rose-500/10 placeholder-rose-300'
+                          : 'border-slate-700 focus:border-indigo-500'
+                      }`}
+                    />
+                  </div>
+                  {devPasswordError && (
+                    <div className="text-[9px] text-rose-400 text-center font-semibold">
+                      Неверный пароль!
+                    </div>
+                  )}
+                  <button
+                    type="submit"
+                    className="w-full py-1.5 bg-indigo-600 hover:bg-indigo-500 text-white text-[10px] font-bold rounded-lg transition-all text-center cursor-pointer"
+                  >
+                    Активировать
+                  </button>
+                </form>
+              )}
+            </div>
+          )}
 
           <div className="mt-auto pt-4 border-t border-slate-800 px-2 text-[10px] text-slate-500 font-mono">
             Pulse Desktop v2.0.0
@@ -374,106 +525,95 @@ export const SettingsModal: React.FC = () => {
               </div>
             )}
 
-            {activeSettingsTab === 'streamer' && (
-              <div className="space-y-4">
-                <div className="p-4 rounded-xl bg-slate-950 border border-slate-800 flex items-center justify-between">
-                  <div>
-                    <div className="font-semibold text-white">Скрыть Email и Личный IP</div>
-                    <div className="text-[11px] text-slate-400 mt-0.5">
-                      Автоматически скрывать конфиденциальную информацию пользователя во время захвата экрана в OBS.
-                    </div>
-                  </div>
-                  <button
-                    onClick={toggleStreamerMode}
-                    className={`px-3 py-1.5 rounded-lg font-semibold transition-all ${
-                      isStreamerModeActive
-                        ? 'bg-rose-600 text-white shadow-md shadow-rose-600/30'
-                        : 'bg-slate-800 text-slate-400'
-                    }`}
-                  >
-                    {isStreamerModeActive ? 'АКТИВЕН' : 'ВЫКЛ'}
-                  </button>
-                </div>
-              </div>
-            )}
-
-            {activeSettingsTab === 'overlay' && (
-              <div className="p-6 rounded-2xl bg-slate-950 border border-slate-800 text-center space-y-3">
-                <div className="w-12 h-12 bg-slate-900 border border-slate-800 rounded-xl flex items-center justify-center mx-auto text-slate-400">
-                  <Layers className="w-6 h-6" />
-                </div>
-                <div className="font-bold text-white text-base">Оверлей в разработке</div>
-                <div className="text-xs text-slate-400 leading-relaxed max-w-sm mx-auto">
-                  Настройки и функционал игрового оверлея находятся в процессе активной разработки.
-                </div>
-              </div>
-            )}
-
             {activeSettingsTab === 'performance' && (
-              <div className="space-y-4">
-                <div className="grid grid-cols-2 gap-3">
-                  <div className="p-3 bg-slate-950 rounded-xl border border-slate-800">
-                    <div className="text-slate-400 text-[11px]">Аппаратное ускорение</div>
-                    <div className="text-emerald-400 font-bold text-sm mt-1">GPU ускорение (DirectX 12)</div>
-                  </div>
-                  <div className="p-3 bg-slate-950 rounded-xl border border-slate-800">
-                    <div className="text-slate-400 text-[11px]">Использование ОЗУ</div>
-                    <div className="text-indigo-400 font-bold text-sm mt-1">{performanceMetrics.ramUsageGb} GB</div>
-                  </div>
-                  <div className="p-3 bg-slate-950 rounded-xl border border-slate-800">
-                    <div className="text-slate-400 text-[11px]">FPS</div>
-                    <div className="text-emerald-400 font-bold text-sm mt-1">{performanceMetrics.fps} FPS</div>
-                  </div>
-                  <div className="p-3 bg-slate-950 rounded-xl border border-slate-800">
-                    <div className="text-slate-400 text-[11px]">Ping</div>
-                    <div className="text-sky-400 font-bold text-sm mt-1">{performanceMetrics.pingMs} ms</div>
-                  </div>
-                  <div className="p-3 bg-slate-950 rounded-xl border border-slate-800">
-                    <div className="text-slate-400 text-[11px]">Frame Time</div>
-                    <div className="text-amber-400 font-bold text-sm mt-1">{performanceMetrics.frameTimeMs} ms</div>
-                  </div>
-                  <div className="p-3 bg-slate-950 rounded-xl border border-slate-800">
-                    <div className="text-slate-400 text-[11px]">GPU Usage</div>
-                    <div className="text-rose-400 font-bold text-sm mt-1">{performanceMetrics.gpuUsagePercent}%</div>
-                  </div>
-                </div>
-              </div>
-            )}
-
-            {activeSettingsTab === 'network' && (
-              <div className="space-y-6">
+              <div className="space-y-5">
                 <div>
-                  <h4 className="text-sm font-bold text-white mb-1 flex items-center gap-2">
-                    <Server className="w-4 h-4 text-blue-400" /> Конфигурация API
-                  </h4>
-                  <p className="text-slate-400 text-[11px] mb-4">
-                    Используется для подключения десктопного приложения к вашему облачному серверу Pulse.
-                  </p>
-                  
-                  <div className="space-y-4">
-                    <div>
-                      <label className="text-slate-300 font-semibold mb-2 block">
-                        URL сервера API
-                      </label>
-                      <div className="relative">
-                        <input
-                          type="text"
-                          value={apiUrl}
-                          onChange={(e) => saveApiUrl(e.target.value)}
-                          placeholder="Напр. https://your-app.run.app"
-                          className="w-full bg-slate-950 border-2 border-slate-800 rounded-xl px-4 py-3 text-white placeholder:text-slate-600 focus:border-blue-500 focus:outline-none transition-all"
-                        />
+                  <div className="text-[11px] font-bold text-slate-400 uppercase tracking-wider mb-2.5 px-1">
+                    Текущие показатели (Live Telemetry)
+                  </div>
+                  <div className="grid grid-cols-2 md:grid-cols-3 gap-3">
+                    <div className="p-3 bg-slate-950 rounded-xl border border-slate-800 flex flex-col justify-between">
+                      <div className="text-slate-400 text-[11px] flex items-center gap-1.5">
+                        <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse"></span>
+                        Частота кадров
                       </div>
-                      <p className="mt-2 text-[10px] text-slate-500">
-                        Оставьте пустым, чтобы использовать локальный сервер (http://localhost:3000).
-                      </p>
+                      <div className="text-emerald-400 font-bold text-base mt-1.5">{performanceMetrics.fps} <span className="text-xs font-semibold text-slate-500">FPS</span></div>
                     </div>
 
-                    <div className="p-4 rounded-xl bg-blue-500/10 border border-blue-500/20">
-                      <div className="text-blue-300 font-semibold mb-1">Совет для Electron</div>
-                      <div className="text-[11px] text-blue-400/80 leading-relaxed">
-                        Чтобы войти в свой аккаунт из веб-версии, скопируйте адрес текущей страницы (без /login) и вставьте его сюда. После этого перезагрузите приложение.
+                    <div className="p-3 bg-slate-950 rounded-xl border border-slate-800 flex flex-col justify-between">
+                      <div className="text-slate-400 text-[11px] flex items-center gap-1.5">
+                        <span className="w-1.5 h-1.5 rounded-full bg-amber-500"></span>
+                        Время кадра
                       </div>
+                      <div className="text-amber-400 font-bold text-base mt-1.5">{performanceMetrics.frameTimeMs} <span className="text-xs font-semibold text-slate-500">ms</span></div>
+                    </div>
+
+                    <div className="p-3 bg-slate-950 rounded-xl border border-slate-800 flex flex-col justify-between">
+                      <div className="text-slate-400 text-[11px] flex items-center gap-1.5">
+                        <span className="w-1.5 h-1.5 rounded-full bg-sky-500"></span>
+                        Задержка сети (Ping)
+                      </div>
+                      <div className="text-sky-400 font-bold text-base mt-1.5">{performanceMetrics.pingMs} <span className="text-xs font-semibold text-slate-500">ms</span></div>
+                    </div>
+
+                    <div className="p-3 bg-slate-950 rounded-xl border border-slate-800 flex flex-col justify-between">
+                      <div className="text-slate-400 text-[11px] flex items-center gap-1.5">
+                        <span className="w-1.5 h-1.5 rounded-full bg-indigo-500 animate-pulse"></span>
+                        ОЗУ (JS Heap)
+                      </div>
+                      <div className="text-indigo-400 font-bold text-base mt-1.5">{performanceMetrics.ramUsageGb} <span className="text-xs font-semibold text-slate-500">GB</span></div>
+                    </div>
+
+                    <div className="p-3 bg-slate-950 rounded-xl border border-slate-800 flex flex-col justify-between">
+                      <div className="text-slate-400 text-[11px] flex items-center gap-1.5">
+                        <span className="w-1.5 h-1.5 rounded-full bg-rose-500"></span>
+                        Загрузка GPU
+                      </div>
+                      <div className="text-rose-400 font-bold text-base mt-1.5">{performanceMetrics.gpuUsagePercent}%</div>
+                    </div>
+
+                    <div className="p-3 bg-slate-950 rounded-xl border border-slate-800 flex flex-col justify-between">
+                      <div className="text-slate-400 text-[11px] flex items-center gap-1.5">
+                        <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse"></span>
+                        Ускорение
+                      </div>
+                      <div className="text-emerald-400 font-semibold text-xs mt-1.5 truncate" title={systemInfo.hwAcceleration}>{systemInfo.hwAcceleration}</div>
+                    </div>
+                  </div>
+                </div>
+
+                <div className="border-t border-slate-800 pt-4">
+                  <div className="text-[11px] font-bold text-slate-400 uppercase tracking-wider mb-2.5 px-1">
+                    Характеристики системы (System Specs)
+                  </div>
+                  <div className="bg-slate-950 border border-slate-800 rounded-xl overflow-hidden divide-y divide-slate-900">
+                    <div className="p-3 flex items-center justify-between gap-4">
+                      <span className="text-slate-400">Операционная система</span>
+                      <span className="text-white font-medium bg-slate-900 px-2.5 py-1 rounded-lg border border-slate-800 text-right">{systemInfo.os}</span>
+                    </div>
+                    <div className="p-3 flex items-center justify-between gap-4">
+                      <span className="text-slate-400">Браузер</span>
+                      <span className="text-white font-medium bg-slate-900 px-2.5 py-1 rounded-lg border border-slate-800 text-right">{systemInfo.browser}</span>
+                    </div>
+                    <div className="p-3 flex items-center justify-between gap-4">
+                      <span className="text-slate-400">Процессор (Ядра)</span>
+                      <span className="text-indigo-300 font-medium bg-slate-900 px-2.5 py-1 rounded-lg border border-slate-800 text-right">{systemInfo.cpuCores}</span>
+                    </div>
+                    <div className="p-3 flex items-center justify-between gap-4">
+                      <span className="text-slate-400">Память устройства</span>
+                      <span className="text-amber-300 font-medium bg-slate-900 px-2.5 py-1 rounded-lg border border-slate-800 text-right">{systemInfo.deviceMemory}</span>
+                    </div>
+                    <div className="p-3 flex items-center justify-between gap-4">
+                      <span className="text-slate-400">Видеокарта (GPU)</span>
+                      <span className="text-rose-300 font-medium bg-slate-900 px-2.5 py-1 rounded-lg border border-slate-800 text-right max-w-[280px] truncate" title={systemInfo.gpu}>{systemInfo.gpu}</span>
+                    </div>
+                    <div className="p-3 flex items-center justify-between gap-4">
+                      <span className="text-slate-400">Разрешение экрана</span>
+                      <span className="text-sky-300 font-medium bg-slate-900 px-2.5 py-1 rounded-lg border border-slate-800 text-right">{systemInfo.resolution}</span>
+                    </div>
+                    <div className="p-3 flex items-center justify-between gap-4">
+                      <span className="text-slate-400">Сетевой адаптер</span>
+                      <span className="text-emerald-300 font-medium bg-slate-900 px-2.5 py-1 rounded-lg border border-slate-800 text-right max-w-[280px] truncate" title={systemInfo.connection}>{systemInfo.connection}</span>
                     </div>
                   </div>
                 </div>

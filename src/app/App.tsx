@@ -1,4 +1,5 @@
 import React, { useState, useEffect } from 'react';
+import { LoadingScreen } from '../components/LoadingScreen';
 import { AppSidebar } from '../widgets/app-sidebar/AppSidebar';
 import { CommunitySidebar } from '../widgets/community-sidebar/CommunitySidebar';
 import { ChatArea } from '../widgets/chat-area/ChatArea';
@@ -7,8 +8,6 @@ import { VoiceDock } from '../widgets/voice-dock/VoiceDock';
 import { FriendsView } from '../widgets/friends-view/FriendsView';
 import { HomePage } from '../widgets/home-page/HomePage';
 import { DiscoveryPage } from '../widgets/discovery-page/DiscoveryPage';
-import { PulseArena } from '../widgets/pulse-arena/PulseArena';
-import { OverlayHUD } from '../widgets/overlay-hud/OverlayHUD';
 import { QuickSwitcher } from '../features/quick-switcher/QuickSwitcher';
 import { SettingsModal } from '../widgets/settings-modal/SettingsModal';
 import { AuthModal } from '../widgets/auth-modal/AuthModal';
@@ -16,53 +15,62 @@ import { InboxModal } from '../widgets/auth-modal/InboxModal';
 import { NotificationsModal } from '../widgets/notifications-modal/NotificationsModal';
 import { ProfileCustomizationModal } from '../widgets/auth-modal/ProfileCustomizationModal';
 import { ScreenShareWindow } from '../widgets/screen-share/ScreenShareWindow';
+import { IncomingCallOverlay } from '../features/incoming-call/IncomingCallOverlay';
+import { DevModeTransition } from '../widgets/dev-transition/DevModeTransition';
 import { useCommunityStore } from '../entities/community/communityStore';
 import { useGameStore } from '../entities/game/gameStore';
 import { useUserStore } from '../entities/user/userStore';
+import { useVoiceStore } from '../entities/voice/voiceStore';
+import { useChatStore } from '../entities/chat/chatStore';
 import { matchesHotkey } from '../lib/hotkeyUtils';
 import { API_BASE } from '../shared/api/config';
+import { soundService } from '../shared/services/soundService';
 
 import { AnimatedBackground } from '../shared/ui/AnimatedBackground';
 import { EyeOff } from 'lucide-react';
+import { AnimatePresence } from 'motion/react';
 
 export default function App() {
   const { activeTab } = useCommunityStore();
-  const { isOverlayOpen, crosshairEnabled, fpsWidgetEnabled, performanceMetrics, updatePerformanceMetrics } = useGameStore();
-  const { fetchFriendsServer, searchUsersServer, updateUserStatusServer, isAuthenticated, isStreamerModeActive, toggleStreamerMode, muteMicHotkey, deafenHotkey } = useUserStore();
+  const { crosshairEnabled, fpsWidgetEnabled, performanceMetrics, updatePerformanceMetrics } = useGameStore();
+  const { fetchFriendsServer, searchUsersServer, updateUserStatusServer, isAuthenticated, currentUser, muteMicHotkey, deafenHotkey } = useUserStore();
+  const { pollAllDirectMessages } = useChatStore();
   const [showMembers, setShowMembers] = useState(true);
+  const [isLoading, setIsLoading] = useState(true);
 
-  // 1. Mock OBS detection
   useEffect(() => {
-    const obsInterval = setInterval(() => {
-      // Mock detection: randomly toggle for demonstration
-      const isOBSDetected = Math.random() > 0.9;
-      if (isOBSDetected && !isStreamerModeActive) {
-        toggleStreamerMode();
-      }
-    }, 10000);
-    return () => clearInterval(obsInterval);
-  }, [isStreamerModeActive, toggleStreamerMode]);
+    const timer = setTimeout(() => setIsLoading(false), 2000);
+    return () => clearTimeout(timer);
+  }, []);
 
-  // 2. Global Hotkeys
+  // 1. Global Hotkeys
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
-        if (['Alt', 'Control', 'Shift', 'Meta'].includes(e.key)) return;
-        
-        let combo = "";
-        if (e.altKey) combo += "ALT+";
-        if (e.ctrlKey) combo += "CTRL+";
-        if (e.shiftKey) combo += "SHIFT+";
-        if (e.key) {
-            combo += e.key.toUpperCase();
-        }
-        
-        if (matchesHotkey(combo, muteMicHotkey)) {
-            console.log('Mute/Unmute microphone action triggered:', combo);
-        }
-        if (matchesHotkey(combo, deafenHotkey)) {
-            console.log('Deafen action triggered:', combo);
-        }
+      const targetTag = (e.target as HTMLElement)?.tagName;
+      const isInput = targetTag === 'INPUT' || targetTag === 'TEXTAREA';
+
+      if (['Alt', 'Control', 'Shift', 'Meta'].includes(e.key)) return;
+
+      const keys: string[] = [];
+      if (e.altKey) keys.push('ALT');
+      if (e.ctrlKey) keys.push('CTRL');
+      if (e.shiftKey) keys.push('SHIFT');
+      if (e.metaKey) keys.push('META');
+      if (e.key) keys.push(e.key.toUpperCase());
+
+      const combo = keys.join('+');
+
+      if (matchesHotkey(combo, muteMicHotkey)) {
+        if (isInput && !e.altKey && !e.ctrlKey) return;
+        e.preventDefault();
+        useVoiceStore.getState().toggleMute();
+      } else if (matchesHotkey(combo, deafenHotkey)) {
+        if (isInput && !e.altKey && !e.ctrlKey) return;
+        e.preventDefault();
+        useVoiceStore.getState().toggleDeafen();
+      }
     };
+
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
   }, [muteMicHotkey, deafenHotkey]);
@@ -76,8 +84,28 @@ export default function App() {
     }
   }, [isAuthenticated, fetchFriendsServer, searchUsersServer, updateUserStatusServer]);
 
+  // Global background polling for direct messages and friends list/friend requests (plays sound & displays avatars on sidebar)
+  useEffect(() => {
+    if (!isAuthenticated || !currentUser?.username) return;
+
+    const poll = () => {
+      pollAllDirectMessages(currentUser.username, activeTab === 'direct_messages');
+      fetchFriendsServer();
+    };
+
+    poll();
+    const interval = setInterval(poll, 2500);
+    return () => clearInterval(interval);
+  }, [isAuthenticated, currentUser?.username, activeTab, pollAllDirectMessages, fetchFriendsServer]);
+
   // Real-time Performance Tracking Engine
   useEffect(() => {
+    const handleUserInteraction = () => {
+      soundService.resumeAudio();
+      document.removeEventListener('click', handleUserInteraction);
+    };
+    document.addEventListener('click', handleUserInteraction);
+
     let frameCount = 0;
     let lastTime = performance.now();
     let rAFId: number;
@@ -146,70 +174,76 @@ export default function App() {
 
   return (
     <div className="flex h-screen w-screen overflow-hidden bg-[#09090B] font-sans text-slate-100 antialiased select-none relative">
-      <AnimatedBackground />
-      {/* 1. Leftmost Navigation Rail */}
-      <AppSidebar />
+      <AnimatePresence>
+        {isLoading && <LoadingScreen />}
+      </AnimatePresence>
+      {!isLoading && (
+        <>
+          <AnimatedBackground />
+          {/* 1. Leftmost Navigation Rail */}
+          <AppSidebar />
 
-      {/* 2. Main Workspace Layout */}
-      <div className="flex-1 flex flex-col h-full overflow-hidden relative">
-        <div className="flex-1 flex h-full overflow-hidden">
-          {activeTab === 'channels' && (
-            <>
-              {/* Community Channel Hierarchy */}
-              <CommunitySidebar />
+          {/* 2. Main Workspace Layout */}
+          <div className="flex-1 flex flex-col h-full overflow-hidden relative">
+            <div className="flex-1 flex h-full overflow-hidden">
+              {activeTab === 'channels' && (
+                <>
+                  {/* Community Channel Hierarchy */}
+                  <CommunitySidebar />
 
-              {/* Main Chat & Content Workspace */}
-              <ChatArea
-                onToggleMembers={() => setShowMembers(!showMembers)}
-                showMembers={showMembers}
-              />
+                  {/* Main Chat & Content Workspace */}
+                  <ChatArea
+                    onToggleMembers={() => setShowMembers(!showMembers)}
+                    showMembers={showMembers}
+                  />
 
-              {/* Right Member List */}
-              {showMembers && <MemberSidebar />}
-            </>
+                  {/* Right Member List */}
+                  {showMembers && <MemberSidebar />}
+                </>
+              )}
+
+              {activeTab === 'home' && <HomePage />}
+
+              {activeTab === 'direct_messages' && <FriendsView />}
+
+              {activeTab === 'discovery' && <DiscoveryPage />}
+            </div>
+
+            {/* Floating/Docked Voice Controls Bar */}
+            <VoiceDock />
+            <ScreenShareWindow />
+          </div>
+
+          {/* 3. Global Overlays & Modals */}
+          <IncomingCallOverlay />
+          <QuickSwitcher />
+          <SettingsModal />
+          <AuthModal />
+          <NotificationsModal />
+          <InboxModal />
+          <ProfileCustomizationModal />
+          <DevModeTransition />
+
+          {/* 4. Active Visual Overlays */}
+          {crosshairEnabled && (
+            <div className="fixed top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 z-40 pointer-events-none select-none flex items-center justify-center">
+              <div className="w-1.5 h-1.5 rounded-full bg-emerald-400 shadow-[0_0_8px_rgba(52,211,153,0.8)] animate-pulse" />
+              <div className="absolute w-4 h-[1.5px] bg-emerald-400/70" />
+              <div className="absolute h-4 w-[1.5px] bg-emerald-400/70" />
+            </div>
           )}
 
-          {activeTab === 'home' && <HomePage />}
-
-          {activeTab === 'direct_messages' && <FriendsView />}
-
-          {activeTab === 'discovery' && <DiscoveryPage />}
-
-          {activeTab === 'overlay_sandbox' && <PulseArena />}
-        </div>
-
-        {/* Floating/Docked Voice Controls Bar */}
-        <VoiceDock />
-        <ScreenShareWindow />
-      </div>
-
-      {/* 3. Global Overlays & Modals */}
-      <OverlayHUD />
-      <QuickSwitcher />
-      <SettingsModal />
-      <AuthModal />
-      <NotificationsModal />
-      <InboxModal />
-      <ProfileCustomizationModal />
-
-      {/* 4. Active Visual Overlays */}
-      {crosshairEnabled && !isOverlayOpen && (
-        <div className="fixed top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 z-40 pointer-events-none select-none flex items-center justify-center">
-          <div className="w-1.5 h-1.5 rounded-full bg-emerald-400 shadow-[0_0_8px_rgba(52,211,153,0.8)] animate-pulse" />
-          <div className="absolute w-4 h-[1.5px] bg-emerald-400/70" />
-          <div className="absolute h-4 w-[1.5px] bg-emerald-400/70" />
-        </div>
-      )}
-
-      {fpsWidgetEnabled && !isOverlayOpen && (
-        <div className="fixed top-3 right-3 z-40 bg-[#111113]/90 border border-white/10 px-2.5 py-1 rounded-xl text-[10px] font-mono text-emerald-400 font-bold flex items-center gap-1.5 shadow-lg backdrop-blur-md pointer-events-none select-none">
-          <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse" />
-          <span>{performanceMetrics.fps} FPS</span>
-          <span className="text-slate-500">•</span>
-          <span className="text-slate-300">{performanceMetrics.frameTimeMs}мс</span>
-          <span className="text-slate-500">•</span>
-          <span className="text-slate-300">{performanceMetrics.pingMs}мс Ping</span>
-        </div>
+          {fpsWidgetEnabled && (
+            <div className="fixed top-3 right-3 z-40 bg-[#111113]/90 border border-white/10 px-2.5 py-1 rounded-xl text-[10px] font-mono text-emerald-400 font-bold flex items-center gap-1.5 shadow-lg backdrop-blur-md pointer-events-none select-none">
+              <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse" />
+              <span>{performanceMetrics.fps} FPS</span>
+              <span className="text-slate-500">•</span>
+              <span className="text-slate-300">{performanceMetrics.frameTimeMs}мс</span>
+              <span className="text-slate-500">•</span>
+              <span className="text-slate-300">{performanceMetrics.pingMs}мс Ping</span>
+            </div>
+          )}
+        </>
       )}
     </div>
   );

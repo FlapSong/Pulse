@@ -13,6 +13,7 @@ import {
   UserX
 } from 'lucide-react';
 import { useUserStore } from '../../entities/user/userStore';
+import { useGameStore } from '../../entities/game/gameStore';
 import { Avatar } from '../../shared/ui/Avatar';
 
 interface DevNewsItem {
@@ -75,8 +76,11 @@ export const NotificationsModal: React.FC = () => {
     incomingRequests,
     acceptFriendRequestServer,
     declineFriendRequestServer,
-    fetchFriendsServer
+    fetchFriendsServer,
+    simulateFriendRequestServer
   } = useUserStore();
+
+  const { isDevMode } = useGameStore();
 
   const [activeTab, setActiveTab] = useState<'all' | 'requests' | 'news'>('all');
   const [processingUser, setProcessingUser] = useState<string | null>(null);
@@ -216,6 +220,24 @@ export const NotificationsModal: React.FC = () => {
                   <UserPlus className="w-3.5 h-3.5 text-[#22D3EE]" />
                   Запросы в друзья ({incomingRequests.length})
                 </span>
+
+                {isDevMode && (
+                  <button
+                    type="button"
+                    onClick={async () => {
+                      const res = await simulateFriendRequestServer();
+                      if (res.success) {
+                        setActionSuccessMsg(res.message || 'Тестовая заявка успешно симулирована!');
+                        setTimeout(() => setActionSuccessMsg(null), 3000);
+                      }
+                    }}
+                    className="px-2.5 py-1 rounded-lg bg-[#22D3EE]/10 hover:bg-[#22D3EE]/20 text-[#22D3EE] border border-[#22D3EE]/30 text-[10px] font-bold flex items-center gap-1 transition-all cursor-pointer shadow-sm shrink-0"
+                    title="Сгенерировать случайный входящий запрос в друзья"
+                  >
+                    <Sparkles className="w-3 h-3 text-[#22D3EE]" />
+                    <span>🧪 Тестовая заявка</span>
+                  </button>
+                )}
               </div>
 
               {incomingRequests.length === 0 ? (

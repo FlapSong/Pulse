@@ -12,6 +12,9 @@ interface VoiceStore {
   isMuted: boolean;
   isDeafened: boolean;
   isScreenSharing: boolean;
+  remoteScreenStream: MediaStream | null;
+  remoteScreenSharer: { id: string; name: string } | null;
+  isRemoteScreenSharing: boolean;
   isKrispActive: boolean;
   isSpatialAudioActive: boolean;
   bitrateKbps: number;
@@ -44,6 +47,9 @@ export const useVoiceStore = create<VoiceStore>((set, get) => ({
   isMuted: false,
   isDeafened: false,
   isScreenSharing: false,
+  remoteScreenStream: null,
+  remoteScreenSharer: null,
+  isRemoteScreenSharing: false,
   isKrispActive: true,
   isSpatialAudioActive: true,
   bitrateKbps: 320,
@@ -142,6 +148,21 @@ export const useVoiceStore = create<VoiceStore>((set, get) => ({
       }));
     };
 
+    webrtcVoice.onRemoteScreenStream = (stream, senderId) => {
+      set({ remoteScreenStream: stream });
+    };
+
+    webrtcVoice.onRemoteScreenShareStateChanged = (senderId, senderName, isSharing) => {
+      set((state) => ({
+        isRemoteScreenSharing: isSharing,
+        remoteScreenSharer: isSharing ? { id: senderId, name: senderName } : null,
+        remoteScreenStream: isSharing ? state.remoteScreenStream : null,
+        participants: state.participants.map((p) =>
+          p.user.id === senderId ? { ...p, isScreenSharing: isSharing } : p
+        )
+      }));
+    };
+
     webrtcVoice.onError = (err) => {
       set({ errorMessage: err });
     };
@@ -179,6 +200,9 @@ export const useVoiceStore = create<VoiceStore>((set, get) => ({
       isMuted: false,
       isDeafened: false,
       isScreenSharing: false,
+      remoteScreenStream: null,
+      remoteScreenSharer: null,
+      isRemoteScreenSharing: false,
       errorMessage: null
     });
   },

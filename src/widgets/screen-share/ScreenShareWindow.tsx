@@ -15,19 +15,36 @@ import {
 } from 'lucide-react';
 import { useVoiceStore } from '../../entities/voice/voiceStore';
 import { useUserStore } from '../../entities/user/userStore';
+import { webrtcVoice } from '../../shared/services/webrtcVoice';
 
 export const ScreenShareWindow: React.FC = () => {
-  const { isScreenSharing, toggleScreenShare, activeVoiceChannelName, participants } = useVoiceStore();
+  const {
+    isScreenSharing,
+    toggleScreenShare,
+    activeVoiceChannelName,
+    participants,
+    remoteScreenStream,
+    remoteScreenSharer,
+    isRemoteScreenSharing
+  } = useVoiceStore();
   const { currentUser } = useUserStore();
 
-  const [stream, setStream] = useState<MediaStream | null>(null);
+  const [localStream, setLocalStream] = useState<MediaStream | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [isMaximized, setIsMaximized] = useState(false);
   const [isPaused, setIsPaused] = useState(false);
 
   const videoRef = useRef<HTMLVideoElement | null>(null);
 
-  // Real Screen Share stream activation
+  const isLocalSharer = isScreenSharing;
+  const isRemoteSharer = !isLocalSharer && (isRemoteScreenSharing || !!remoteScreenStream);
+
+  const activeStream = isLocalSharer ? localStream : remoteScreenStream;
+  const sharerName = isLocalSharer
+    ? currentUser.displayName
+    : remoteScreenSharer?.name || 'Участник звонка';
+
+  // Real Screen Share stream activation for local user
   const startRealScreenShare = async () => {
     try {
       setError(null);
@@ -41,7 +58,8 @@ export const ScreenShareWindow: React.FC = () => {
         audio: false
       });
 
-      setStream(mediaStream);
+      setLocalStream(mediaStream);
+      webrtcVoice.attachScreenStream(mediaStream);
 
       // Listen for stream stopping externally (e.g. Chrome's "Stop sharing" bar)
       mediaStream.getVideoTracks()[0].onended = () => {
@@ -57,9 +75,10 @@ export const ScreenShareWindow: React.FC = () => {
   };
 
   const stopScreenShare = () => {
-    if (stream) {
-      stream.getTracks().forEach(track => track.stop());
-      setStream(null);
+    webrtcVoice.detachScreenStream();
+    if (localStream) {
+      localStream.getTracks().forEach(track => track.stop());
+      setLocalStream(null);
     }
     if (isScreenSharing) {
       toggleScreenShare();
@@ -68,31 +87,33 @@ export const ScreenShareWindow: React.FC = () => {
 
   // Start sharing automatically when isScreenSharing turns true
   useEffect(() => {
-    if (isScreenSharing) {
+    if (isLocalSharer) {
       startRealScreenShare();
     } else {
-      if (stream) {
-        stream.getTracks().forEach(track => track.stop());
-        setStream(null);
+      if (localStream) {
+        webrtcVoice.detachScreenStream();
+        localStream.getTracks().forEach(track => track.stop());
+        setLocalStream(null);
       }
     }
 
     return () => {
-      if (stream) {
-        stream.getTracks().forEach(track => track.stop());
+      if (localStream) {
+        webrtcVoice.detachScreenStream();
+        localStream.getTracks().forEach(track => track.stop());
       }
     };
-  }, [isScreenSharing]);
+  }, [isLocalSharer]);
 
-  // Bind video element to media stream
+  // Bind video element to media stream (local or remote)
   useEffect(() => {
-    if (videoRef.current && stream) {
-      videoRef.current.srcObject = stream;
+    if (videoRef.current && activeStream) {
+      videoRef.current.srcObject = activeStream;
       videoRef.current.play().catch(err => console.error('Error playing screen video:', err));
     }
-  }, [stream]);
+  }, [activeStream]);
 
-  if (!isScreenSharing) return null;
+  if (!isLocalSharer && !isRemoteSharer) return null;
 
   return (
     <AnimatePresence>
@@ -111,10 +132,10 @@ export const ScreenShareWindow: React.FC = () => {
           <div className="flex items-center gap-2 min-w-0">
             <Laptop className="w-4 h-4 text-[#22D3EE] shrink-0" />
             <span className="text-[11px] font-bold text-white truncate">
-              Экран пользователя: {currentUser.displayName}
+              Экран пользователя: {sharerName}
             </span>
             <span className="text-[9px] font-mono bg-[#22D3EE]/15 text-[#22D3EE] px-1.5 py-0.5 rounded border border-[#22D3EE]/30">
-              REAL SCREEN
+              {isLocalSharer ? 'ВАШ СТРИМ' : 'LIVE STREAM'}
             </span>
           </div>
 
@@ -139,13 +160,15 @@ export const ScreenShareWindow: React.FC = () => {
               {isMaximized ? <Minimize2 className="w-3.5 h-3.5" /> : <Maximize2 className="w-3.5 h-3.5" />}
             </button>
 
-            <button
-              onClick={stopScreenShare}
-              title="Остановить трансляцию"
-              className="p-1.5 rounded-lg bg-rose-600/20 hover:bg-rose-600 text-rose-400 hover:text-white transition-all cursor-pointer border border-rose-500/30"
-            >
-              <X className="w-3.5 h-3.5" />
-            </button>
+            {isLocalSharer && (
+              <button
+                onClick={stopScreenShare}
+                title="Остановить трансляцию"
+                className="p-1.5 rounded-lg bg-rose-600/20 hover:bg-rose-600 text-rose-400 hover:text-white transition-all cursor-pointer border border-rose-500/30"
+              >
+                <X className="w-3.5 h-3.5" />
+              </button>
+            )}
           </div>
         </div>
 
@@ -171,12 +194,12 @@ export const ScreenShareWindow: React.FC = () => {
                 Открыть в новой вкладке 🚀
               </a>
             </div>
-          ) : stream ? (
+          ) : activeStream ? (
             <video
               ref={videoRef}
               autoPlay
               playsInline
-              muted
+              muted={isLocalSharer}
               className="w-full h-full object-contain"
             />
           ) : (
@@ -189,7 +212,7 @@ export const ScreenShareWindow: React.FC = () => {
           )}
 
           {/* Player controls overlay on hover */}
-          {stream && !error && (
+          {activeStream && !error && (
             <div className="absolute inset-0 bg-gradient-to-t from-black/80 via-transparent to-transparent opacity-0 group-hover:opacity-100 transition-opacity duration-200 flex flex-col justify-end p-4">
               <div className="flex items-center justify-between">
                 {/* Left Actions */}

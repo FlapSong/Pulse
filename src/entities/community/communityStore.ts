@@ -7,11 +7,11 @@ interface CommunityStore {
   activeCommunityId: string | null; // null means Direct Messages / Friends
   activeChannelId: string;
   searchQuery: string;
-  activeTab: 'home' | 'channels' | 'direct_messages' | 'discovery' | 'overlay_sandbox';
+  activeTab: 'home' | 'channels' | 'direct_messages' | 'discovery';
   
   setActiveCommunity: (communityId: string | null) => void;
   setActiveChannel: (channelId: string) => void;
-  setActiveTab: (tab: 'home' | 'channels' | 'direct_messages' | 'discovery' | 'overlay_sandbox') => void;
+  setActiveTab: (tab: 'home' | 'channels' | 'direct_messages' | 'discovery') => void;
   setSearchQuery: (query: string) => void;
   getActiveCommunity: () => Community | undefined;
   getActiveChannel: () => Channel | undefined;

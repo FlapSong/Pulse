@@ -3,7 +3,6 @@ import { motion, AnimatePresence } from 'motion/react';
 import {
   MessageSquare,
   Compass,
-  MonitorPlay,
   Settings,
   Zap,
   Volume2,
@@ -13,7 +12,8 @@ import {
   Moon,
   MinusCircle,
   Edit2,
-  EyeOff
+  EyeOff,
+  Sparkles
 } from 'lucide-react';
 import { useCommunityStore } from '../../entities/community/communityStore';
 import { useUserStore } from '../../entities/user/userStore';
@@ -25,20 +25,42 @@ import { Avatar } from '../../shared/ui/Avatar';
 export const AppSidebar: React.FC = () => {
   const { communities, activeCommunityId, activeTab, setActiveCommunity, setActiveTab } =
     useCommunityStore();
-  const { currentUser, friends, logout, setNotificationsModalOpen, setProfileModalOpen, incomingRequests, setStatus, isStreamerModeActive, toggleStreamerMode } = useUserStore();
+  const { currentUser, friends, logout, setNotificationsModalOpen, setProfileModalOpen, incomingRequests, setStatus } = useUserStore();
   const { activeVoiceChannelId, activeVoiceChannelName } = useVoiceStore();
-  const { isOverlayOpen, toggleOverlay, setSettingsOpen } = useGameStore();
-  const { unreadCounts, setActiveChatUser } = useChatStore();
+  const { setSettingsOpen, isDevMode } = useGameStore();
+  const { unreadCounts, messagesByChannel, setActiveChatUser, simulateIncomingMessage } = useChatStore();
 
-  // Find unread DMs
+  const isDnd = currentUser.status === 'dnd' || (
+    currentUser.customStatus && (
+      currentUser.customStatus.toLowerCase().includes('не беспокоить') ||
+      currentUser.customStatus.toLowerCase().includes('dnd')
+    )
+  );
+
+  // Find unread DMs (always visible on side panel, even in Do Not Disturb mode)
   const unreadDms = Object.entries(unreadCounts)
-    .filter(([channelId]) => channelId.startsWith('dm-'))
+    .filter(([channelId, count]) => channelId.startsWith('dm-') && count > 0)
     .map(([channelId, count]) => {
-      // Find the friend this channel belongs to
-      const friend = friends.find(f => {
+      let friend = friends.find(f => {
         const expectedId = ['dm', currentUser.username, f.username].sort().join('-');
         return expectedId === channelId;
       });
+
+      if (!friend) {
+        const msgs = messagesByChannel[channelId] || [];
+        const senderMsg = msgs.slice().reverse().find(m => m.author?.username?.toLowerCase() !== currentUser.username?.toLowerCase());
+        if (senderMsg && senderMsg.author) {
+          friend = {
+            id: senderMsg.author.id,
+            username: senderMsg.author.username,
+            displayName: senderMsg.author.displayName,
+            avatar: senderMsg.author.avatar,
+            status: senderMsg.author.status || 'online',
+            customStatus: senderMsg.author.customStatus || ''
+          };
+        }
+      }
+
       return { channelId, count, user: friend };
     })
     .filter(item => item.user !== undefined);
@@ -111,6 +133,28 @@ export const AppSidebar: React.FC = () => {
             />
           )}
         </button>
+
+        {/* Simulation Test Button for DM Notifications */}
+        {isDevMode && (
+          <button
+            onClick={() => {
+              if (currentUser?.username) {
+                simulateIncomingMessage(
+                  currentUser.username,
+                  'Кибер-Друг',
+                  'Привет! 👋 Это симулированное тестовое сообщение для проверки звука уведомления и аватарки на панели!'
+                );
+              }
+            }}
+            className="relative group w-10 h-10 rounded-2xl bg-[#22D3EE]/10 hover:bg-[#22D3EE]/25 text-[#22D3EE] border border-[#22D3EE]/30 flex items-center justify-center transition-all duration-200 cursor-pointer shadow-sm hover:scale-105"
+            title="Симулировать получение ЛС от друга"
+          >
+            <Sparkles className="w-4 h-4" />
+            <span className="absolute left-16 bg-[#17171C] border border-white/[0.08] text-xs font-semibold px-2.5 py-1 rounded-xl shadow-2xl text-[#22D3EE] whitespace-nowrap opacity-0 group-hover:opacity-100 transition-opacity duration-150 pointer-events-none z-50">
+              🧪 Симулировать входящее ЛС
+            </span>
+          </button>
+        )}
 
         {/* Dynamic Unread DM Avatars */}
         <AnimatePresence>
@@ -208,42 +252,7 @@ export const AppSidebar: React.FC = () => {
             />
           )}
         </button>
-
-        {/* In-Game Overlay Mode Sandbox Button */}
-        <button
-          onClick={toggleOverlay}
-          className={`
-            relative group w-10 h-10 rounded-2xl flex items-center justify-center transition-all duration-200 cursor-pointer
-            ${
-              isOverlayOpen
-                ? 'bg-purple-600 text-white shadow-lg shadow-purple-600/30 font-bold'
-                : 'bg-[#17171C] text-[#A1A1AA] hover:bg-white/[0.08] hover:text-purple-400'
-            }
-          `}
-        >
-          <MonitorPlay className="w-4 h-4" />
-          <span className="absolute left-16 bg-[#17171C] border border-white/[0.08] text-xs font-semibold px-2.5 py-1.5 rounded-xl shadow-2xl text-[#F5F5F7] whitespace-nowrap opacity-0 group-hover:opacity-100 transition-opacity duration-150 pointer-events-none z-50 flex flex-col">
-            <span className="font-bold text-[#F5F5F7]">Игровой Оверлей (Alt+U)</span>
-            <span className="text-[10px] text-purple-300">HUD Режим поверх игры</span>
-          </span>
-        </button>
       </div>
-
-      {/* Active Voice Channel Quick Indicator */}
-      {isStreamerModeActive && (
-        <div className="mb-2">
-            <div 
-              onClick={toggleStreamerMode}
-              className="w-9 h-9 rounded-xl bg-rose-900/50 border border-rose-500/50 flex items-center justify-center text-white cursor-pointer group relative hover:bg-rose-900/70 animate-pulse"
-            >
-              <EyeOff className="w-4 h-4" />
-              <span className="absolute left-16 bg-[#17171C] border border-rose-500/50 text-xs font-semibold px-2.5 py-1.5 rounded-xl shadow-2xl whitespace-nowrap opacity-0 group-hover:opacity-100 transition-opacity duration-150 pointer-events-none z-50 flex flex-col">
-                <span className="text-white font-bold">Режим стримера включен</span>
-                <span className="text-[10px] text-white/70">Нажмите чтобы выключить</span>
-              </span>
-            </div>
-        </div>
-      )}
 
       {activeVoiceChannelId && (
         <div className="mb-2">

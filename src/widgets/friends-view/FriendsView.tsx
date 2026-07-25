@@ -28,14 +28,19 @@ import {
   FileCode,
   ChevronUp,
   ChevronDown,
-  Download
+  ArrowDown,
+  Download,
+  MoreVertical,
+  Trash2
 } from 'lucide-react';
 import { Avatar } from '../../shared/ui/Avatar';
 import { useUserStore } from '../../entities/user/userStore';
 import { useVoiceStore } from '../../entities/voice/voiceStore';
 import { useChatStore } from '../../entities/chat/chatStore';
+import { useGameStore } from '../../entities/game/gameStore';
 import { AudioWaveform } from '../../shared/ui/AudioWaveform';
 import { UserStatus } from '../../shared/types';
+import { API_BASE } from '../../shared/api/config';
 
 import { AnimatedBackground } from '../../shared/ui/AnimatedBackground';
 
@@ -53,8 +58,11 @@ export const FriendsView: React.FC = () => {
     declineFriendRequestServer,
     removeFriendServer,
     blockUserServer,
+    unblockUserServer,
     setStatus,
-    setCustomStatus
+    setCustomStatus,
+    blockedLogins,
+    blockedByLogins
   } = useUserStore();
 
   const {
@@ -70,6 +78,8 @@ export const FriendsView: React.FC = () => {
   const [addSearchQuery, setAddSearchQuery] = useState('');
   const [addStatusMessage, setAddStatusMessage] = useState<{ text: string; error?: boolean } | null>(null);
 
+
+
   // Status editing state
   const [isEditingCustomStatus, setIsEditingCustomStatus] = useState(false);
   const [customStatusInput, setCustomStatusInput] = useState(currentUser.customStatus || '');
@@ -80,16 +90,113 @@ export const FriendsView: React.FC = () => {
   const [isCallStageCollapsed, setIsCallStageCollapsed] = useState(false);
   const [lightboxImage, setLightboxImage] = useState<string | null>(null);
   const [incomingCall, setIncomingCall] = useState<{ roomId: string; callerId: string; callerName: string } | null>(null);
-  const dmFileInputRef = useRef<HTMLInputElement>(null);
+  const scrollContainerRef = useRef<HTMLDivElement>(null);
   const messagesEndRef = useRef<HTMLDivElement>(null);
+  const dmFileInputRef = useRef<HTMLInputElement>(null);
+  const [isNearBottomDm, setIsNearBottomDm] = useState(true);
+  const [showScrollBottomBtnDm, setShowScrollBottomBtnDm] = useState(false);
+  const [showChatMenu, setShowChatMenu] = useState(false);
+  const [confirmingAction, setConfirmingAction] = useState<'clear' | 'remove' | 'block' | null>(null);
+  const [confirmingFriendAction, setConfirmingFriendAction] = useState<'remove' | 'block' | null>(null);
+  const chatMenuRef = useRef<HTMLDivElement>(null);
+  const [openFriendMenuUsername, setOpenFriendMenuUsername] = useState<string | null>(null);
+
+  const prevDmCountRef = useRef<number>(0);
+  const prevDmLastIdRef = useRef<string | null>(null);
 
   // useChatStore
-  const { messagesByChannel, sendMessage, fetchDirectMessages, toggleReaction, activeChatUser, setActiveChatUser, incrementUnreadCount, markAsRead } = useChatStore();
+  const {
+    messagesByChannel,
+    sendMessage,
+    fetchDirectMessages,
+    toggleReaction,
+    activeChatUser,
+    setActiveChatUser,
+    incrementUnreadCount,
+    markAsRead,
+    simulateIncomingMessage,
+    clearDirectMessagesServer
+  } = useChatStore();
 
-  // Auto-scroll to bottom
+  const hasBlockedMe = activeChatUser ? (blockedByLogins || []).includes(activeChatUser.username.toLowerCase()) : false;
+  const isBlockedByMe = activeChatUser ? (blockedLogins || []).includes(activeChatUser.username.toLowerCase()) : false;
+
+  const { isDevMode } = useGameStore();
+
+  // Close chat menu on click outside
   useEffect(() => {
+    const handleClickOutside = (event: MouseEvent) => {
+      if (chatMenuRef.current && !chatMenuRef.current.contains(event.target as Node)) {
+        setShowChatMenu(false);
+        setConfirmingAction(null);
+      }
+    };
+    document.addEventListener('mousedown', handleClickOutside);
+    return () => document.removeEventListener('mousedown', handleClickOutside);
+  }, []);
+
+  const handleDmScroll = () => {
+    const container = scrollContainerRef.current;
+    if (!container) return;
+
+    const distanceFromBottom = container.scrollHeight - container.scrollTop - container.clientHeight;
+    
+    // Within 150px is considered near bottom
+    const nearBottom = distanceFromBottom < 150;
+    setIsNearBottomDm(nearBottom);
+
+    // Show button if scrolled up more than 350px
+    setShowScrollBottomBtnDm(distanceFromBottom > 350);
+  };
+
+  const scrollToBottomDm = () => {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
-  }, [messagesByChannel, activeChatUser]);
+    setIsNearBottomDm(true);
+    setShowScrollBottomBtnDm(false);
+  };
+
+  // Auto-scroll on direct messages change - ONLY if there's a new message and we are near the bottom or it is ours
+  useEffect(() => {
+    if (!activeChatUser || !currentUser.username) return;
+    const threadId = ['dm', currentUser.username, activeChatUser.username].sort().join('-');
+    const threadMessages = messagesByChannel[threadId] || [];
+    const currentCount = threadMessages.length;
+    const currentLastMessage = threadMessages[currentCount - 1];
+    const currentLastId = currentLastMessage?.id || null;
+
+    // Check if a new message actually arrived
+    const isNewMessage = currentCount > prevDmCountRef.current || (currentLastId !== null && currentLastId !== prevDmLastIdRef.current);
+
+    // Update refs
+    prevDmCountRef.current = currentCount;
+    prevDmLastIdRef.current = currentLastId;
+
+    if (isNewMessage) {
+      const isLastMessageMine = currentLastMessage?.author?.id === currentUser?.id || currentLastMessage?.author?.username === currentUser?.username;
+      
+      if (isNearBottomDm || isLastMessageMine) {
+        setTimeout(() => {
+          messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
+        }, 30);
+      }
+    }
+  }, [messagesByChannel, activeChatUser, isNearBottomDm, currentUser]);
+
+  // Reset scroll and force to bottom on active DM user change
+  useEffect(() => {
+    if (activeChatUser?.username && currentUser.username) {
+      const threadId = ['dm', currentUser.username, activeChatUser.username].sort().join('-');
+      const threadMessages = messagesByChannel[threadId] || [];
+      prevDmCountRef.current = threadMessages.length;
+      prevDmLastIdRef.current = threadMessages[threadMessages.length - 1]?.id || null;
+
+      setTimeout(() => {
+        messagesEndRef.current?.scrollIntoView({ behavior: 'auto' as any });
+        setIsNearBottomDm(true);
+        setShowScrollBottomBtnDm(false);
+      }, 50);
+    }
+  }, [activeChatUser?.username, currentUser.username]);
 
   // Initial & periodic sync for friends list
   useEffect(() => {
@@ -104,13 +211,17 @@ export const FriendsView: React.FC = () => {
   useEffect(() => {
     if (!activeChatUser || !currentUser.username) return;
     
+    const threadId = ['dm', currentUser.username, activeChatUser.username].sort().join('-');
+    markAsRead(threadId);
+
     fetchDirectMessages(currentUser.username, activeChatUser.username);
     const interval = setInterval(() => {
       fetchDirectMessages(currentUser.username, activeChatUser.username);
+      markAsRead(threadId);
     }, 1500);
 
     return () => clearInterval(interval);
-  }, [activeChatUser, currentUser.username, fetchDirectMessages]);
+  }, [activeChatUser, currentUser.username, fetchDirectMessages, markAsRead]);
 
   // Incoming WebRTC Call detector
   useEffect(() => {
@@ -149,7 +260,7 @@ export const FriendsView: React.FC = () => {
     connectToVoice(roomId, `Звонок: ${friendDisplayName}`);
 
     // Send ring signal to recipient so their client pops up incoming call modal
-    fetch('/api/calls/signal', {
+    fetch(API_BASE + '/api/calls/signal', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
@@ -216,6 +327,34 @@ export const FriendsView: React.FC = () => {
     const handleKeyDown = (e: React.KeyboardEvent<HTMLInputElement>) => {
       if (e.key === 'Enter') {
         handleSendDm();
+      }
+    };
+
+    const handlePasteDm = (e: React.ClipboardEvent<HTMLInputElement>) => {
+      const items = e.clipboardData?.items;
+      if (!items) return;
+
+      for (let i = 0; i < items.length; i++) {
+        const item = items[i];
+        if (item.type.indexOf('image') !== -1) {
+          const file = item.getAsFile();
+          if (file) {
+            const reader = new FileReader();
+            reader.onload = (event) => {
+              if (event.target?.result) {
+                setDmAttachments([
+                  {
+                    id: `att-${Date.now()}`,
+                    type: 'image',
+                    name: file.name || `photo_${Date.now()}.png`,
+                    url: event.target.result as string
+                  }
+                ]);
+              }
+            };
+            reader.readAsDataURL(file);
+          }
+        }
       }
     };
 
@@ -305,25 +444,134 @@ export const FriendsView: React.FC = () => {
             </div>
           </div>
 
-          {activeVoiceChannelId ? (
-            <button
-              onClick={disconnectVoice}
-              className="px-4 py-2 rounded-xl bg-rose-600 hover:bg-rose-500 text-white text-xs font-bold flex items-center gap-2 transition-all cursor-pointer shadow-[0_0_20px_rgba(225,29,72,0.3)] hover:scale-[1.02]"
-              title="Завершить текущий голосовой звонок"
-            >
-              <PhoneOff className="w-4 h-4" />
-              <span>Завершить</span>
-            </button>
-          ) : (
-            <button
-              onClick={() => handleStartCall(activeChatUser.username, activeChatUser.displayName)}
-              className="px-4 py-2 rounded-xl bg-[#22D3EE] hover:bg-[#06b6d4] text-[#09090B] text-xs font-bold flex items-center gap-2 transition-all cursor-pointer shadow-[0_0_20px_rgba(34,211,238,0.2)] hover:scale-[1.02]"
-              title="Позвонить другу напрямую по WebRTC"
-            >
-              <PhoneCall className="w-4 h-4" />
-              <span>Позвонить</span>
-            </button>
-          )}
+          <div className="flex items-center gap-2">
+            {isDevMode && (
+              <button
+                onClick={() => {
+                  if (currentUser?.username && activeChatUser) {
+                    simulateIncomingMessage(
+                      currentUser.username,
+                      activeChatUser.displayName,
+                      `Сообщение от @${activeChatUser.displayName}: «Привет! Проверяю тестовое сообщение для уведомления 🔔»`
+                    );
+                  }
+                }}
+                className="px-3 py-2 rounded-xl bg-white/5 hover:bg-white/10 text-[#22D3EE] border border-[#22D3EE]/30 text-xs font-bold flex items-center gap-1.5 transition-all cursor-pointer"
+                title="Симулировать получение ответа от этого пользователя"
+              >
+                <Sparkles className="w-3.5 h-3.5" />
+                <span className="hidden sm:inline">Симулировать ответ</span>
+              </button>
+            )}
+
+            {activeVoiceChannelId ? (
+              <button
+                onClick={disconnectVoice}
+                className="px-4 py-2 rounded-xl bg-rose-600 hover:bg-rose-500 text-white text-xs font-bold flex items-center gap-2 transition-all cursor-pointer shadow-[0_0_20px_rgba(225,29,72,0.3)] hover:scale-[1.02]"
+                title="Завершить текущий голосовой звонок"
+              >
+                <PhoneOff className="w-4 h-4" />
+                <span>Завершить</span>
+              </button>
+            ) : (
+              <button
+                onClick={() => handleStartCall(activeChatUser.username, activeChatUser.displayName)}
+                className="px-4 py-2 rounded-xl bg-[#22D3EE] hover:bg-[#06b6d4] text-[#09090B] text-xs font-bold flex items-center gap-2 transition-all cursor-pointer shadow-[0_0_20px_rgba(34,211,238,0.2)] hover:scale-[1.02]"
+                title="Позвонить другу напрямую по WebRTC"
+              >
+                <PhoneCall className="w-4 h-4" />
+                <span>Позвонить</span>
+              </button>
+            )}
+
+            {/* Three dots dropdown menu */}
+            <div className="relative" ref={chatMenuRef}>
+              <button
+                onClick={() => setShowChatMenu(!showChatMenu)}
+                className={`p-2.5 rounded-xl border transition-all cursor-pointer flex items-center justify-center ${
+                  showChatMenu
+                    ? 'bg-[#22D3EE]/10 border-[#22D3EE]/30 text-[#22D3EE]'
+                    : 'bg-white/5 border-white/[0.04] text-[#A1A1AA] hover:text-[#F5F5F7] hover:bg-white/10'
+                }`}
+                title="Управление чатом"
+              >
+                <MoreVertical className="w-4 h-4" />
+              </button>
+
+              <AnimatePresence>
+                {showChatMenu && (
+                  <motion.div
+                    initial={{ opacity: 0, y: 10, scale: 0.95 }}
+                    animate={{ opacity: 1, y: 0, scale: 1 }}
+                    exit={{ opacity: 0, y: 10, scale: 0.95 }}
+                    transition={{ duration: 0.15 }}
+                    className="absolute right-0 mt-2 w-48 rounded-2xl bg-[#111113] border border-white/[0.08] p-1.5 shadow-2xl z-50 overflow-hidden"
+                  >
+                    {confirmingAction ? (
+                      <div className="px-2 py-2 text-xs">
+                        <p className="text-[#F5F5F7] mb-2 text-center leading-relaxed">
+                          {confirmingAction === 'clear' ? 'Очистить историю сообщений?' : confirmingAction === 'remove' ? 'Удалить из друзей?' : 'Заблокировать?'}
+                        </p>
+                        <div className="flex gap-2">
+                          <button
+                            onClick={async () => {
+                              if (confirmingAction === 'clear' && currentUser?.username && activeChatUser) {
+                                const threadId = ['dm', currentUser.username, activeChatUser.username].sort().join('-');
+                                await clearDirectMessagesServer(threadId, currentUser.username, activeChatUser.username);
+                              } else if (confirmingAction === 'remove' && activeChatUser) {
+                                const res = await removeFriendServer(activeChatUser.username);
+                                if (res.success) setActiveChatUser(null);
+                              } else if (confirmingAction === 'block' && activeChatUser) {
+                                const res = await blockUserServer(activeChatUser.username);
+                                if (res.success) setActiveChatUser(null);
+                              }
+                              setConfirmingAction(null);
+                              setShowChatMenu(false);
+                            }}
+                            className="flex-1 py-1.5 bg-rose-500/20 text-rose-400 rounded-lg font-bold hover:bg-rose-500/30 transition-colors cursor-pointer"
+                          >
+                            Да
+                          </button>
+                          <button
+                            onClick={() => setConfirmingAction(null)}
+                            className="flex-1 py-1.5 bg-white/10 text-white rounded-lg font-bold hover:bg-white/20 transition-colors cursor-pointer"
+                          >
+                            Отмена
+                          </button>
+                        </div>
+                      </div>
+                    ) : (
+                      <>
+                        <button
+                          onClick={() => setConfirmingAction('clear')}
+                          className="w-full text-left px-3 py-2 rounded-xl hover:bg-white/5 text-[#E4E4E7] text-xs font-semibold flex items-center gap-2 transition-all cursor-pointer"
+                        >
+                          <Trash2 className="w-4 h-4 text-slate-400 shrink-0" />
+                          <span>Очистить чат</span>
+                        </button>
+
+                        <button
+                          onClick={() => setConfirmingAction('remove')}
+                          className="w-full text-left px-3 py-2 rounded-xl hover:bg-rose-500/10 text-rose-400 hover:text-rose-300 text-xs font-semibold flex items-center gap-2 transition-all cursor-pointer"
+                        >
+                          <UserMinus className="w-4 h-4 shrink-0" />
+                          <span>Удалить из друзей</span>
+                        </button>
+
+                        <button
+                          onClick={() => setConfirmingAction('block')}
+                          className="w-full text-left px-3 py-2 rounded-xl hover:bg-rose-500/10 text-rose-400 hover:text-rose-300 text-xs font-semibold flex items-center gap-2 transition-all cursor-pointer"
+                        >
+                          <ShieldCheck className="w-4 h-4 shrink-0" />
+                          <span>Заблокировать</span>
+                        </button>
+                      </>
+                    )}
+                  </motion.div>
+                )}
+              </AnimatePresence>
+            </div>
+          </div>
         </div>
 
         {/* Message Stream with floating Active Call Panel */}
@@ -409,7 +657,11 @@ export const FriendsView: React.FC = () => {
             </div>
           )}
           
-          <div className="flex-1 overflow-y-auto p-6 pb-32 space-y-4 no-scrollbar">
+          <div 
+            ref={scrollContainerRef}
+            onScroll={handleDmScroll}
+            className="flex-1 overflow-y-auto p-6 pb-32 space-y-4 no-scrollbar"
+          >
             {threadMessages.length === 0 ? (
               <div className="h-full flex flex-col items-center justify-center text-center p-8 max-w-md mx-auto my-auto space-y-4">
                 <div className="w-16 h-16 rounded-3xl bg-white/5 border border-white/[0.08] flex items-center justify-center text-[#22D3EE]">
@@ -425,29 +677,33 @@ export const FriendsView: React.FC = () => {
             ) : (
               <div className="space-y-4">
                 {threadMessages.map((msg) => {
-                  const isMe = msg.author.id === currentUser.id;
+                  const isMe = msg.author.id === currentUser.id || msg.author.username === currentUser.username;
                   return (
                     <motion.div
                       key={msg.id}
                       initial={{ opacity: 0, y: 10 }}
                       animate={{ opacity: 1, y: 0 }}
                       transition={{ duration: 0.15, ease: 'easeOut' }}
-                      className="flex items-start gap-3 group max-w-2xl ml-auto flex-row-reverse"
+                      className="flex items-start gap-3 group max-w-2xl ml-auto flex-row-reverse text-right"
                     >
                       <Avatar 
                         src={msg.author.avatar} 
-                        alt={msg.author.displayName} 
+                        alt={msg.author.displayName || msg.author.username} 
                         size="md" 
-                        status={isMe ? currentUser.status : (friends.find(f => f.id === msg.author.id)?.status || msg.author.status)} 
+                        status={isMe ? currentUser.status : (friends.find(f => f.username === msg.author.username || f.id === msg.author.id)?.status || msg.author.status || 'online')} 
                       />
                       
                       <div className="space-y-1.5">
                         <div className="flex items-center gap-2 flex-row-reverse">
-                          <span className="text-xs font-bold text-[#F5F5F7]">{msg.author.displayName}</span>
+                          <span className="text-xs font-bold text-[#F5F5F7]">{msg.author.displayName || msg.author.username}</span>
                           <span className="text-[10px] text-[#A1A1AA]">{msg.timestamp}</span>
                         </div>
 
-                        <div className="p-3.5 rounded-2xl border text-xs leading-relaxed bg-[#22D3EE]/10 border-[#22D3EE]/30 text-[#F5F5F7] rounded-tr-none">
+                        <div className={`p-3.5 rounded-2xl border text-xs leading-relaxed text-right ${
+                          isMe 
+                            ? 'bg-[#22D3EE]/10 border-[#22D3EE]/30 text-[#F5F5F7] rounded-tr-none' 
+                            : 'bg-[#18181B] border-white/10 text-[#F5F5F7] rounded-tr-none'
+                        }`}>
                           {msg.content}
 
                            {/* Attachments rendering */}
@@ -600,15 +856,25 @@ export const FriendsView: React.FC = () => {
             )}
           </div>
 
+          {showScrollBottomBtnDm && (
+            <button
+              onClick={scrollToBottomDm}
+              className="absolute bottom-28 right-8 bg-[#22D3EE] hover:bg-[#06b6d4] text-[#09090B] font-bold text-xs py-2 px-3.5 rounded-full shadow-2xl shadow-[#22D3EE]/30 flex items-center gap-1.5 transition-all duration-200 hover:scale-105 z-40 border border-cyan-400 cursor-pointer"
+            >
+              <ArrowDown className="w-4 h-4 animate-bounce" />
+              <span>Вниз</span>
+            </button>
+          )}
+
         </div>
 
         {/* Input Controls */}
-        <div className={`p-4 bg-[#111113] border-t border-white/[0.06] space-y-3 flex-shrink-0 transition-all ${activeVoiceChannelId ? 'pl-64 sm:pl-72' : ''}`}>
+        <div className={`p-4 bg-[#09090B] border-t border-white/[0.06] space-y-3 flex-shrink-0 transition-all ${activeVoiceChannelId ? 'pl-64 sm:pl-72' : ''}`}>
           {/* Attachments preview */}
           {dmAttachments.length > 0 && (
-            <div className="flex items-center gap-2">
+            <div className="flex items-center gap-2 p-2 rounded-2xl bg-[#111113] border border-white/[0.06]">
               {dmAttachments.map((att) => (
-                <div key={att.id} className="relative rounded-xl overflow-hidden border border-white/10 w-24 h-16 bg-white/5 flex flex-col justify-center items-center p-1 text-center">
+                <div key={att.id} className="relative rounded-xl overflow-hidden border border-white/10 w-24 h-16 bg-[#09090B] flex flex-col justify-center items-center p-1 text-center">
                   {att.type === 'image' ? (
                     <img src={att.url} alt={att.name} className="w-full h-full object-cover" />
                   ) : (
@@ -628,7 +894,17 @@ export const FriendsView: React.FC = () => {
             </div>
           )}
 
-          <div className="flex items-center gap-2 bg-[#17171C] border border-white/[0.06] focus-within:border-[#22D3EE] rounded-2xl pl-3 pr-2 py-1.5 transition-all">
+          {hasBlockedMe ? (
+            <div className="flex items-center justify-center p-3 bg-[#111113] border border-white/[0.06] rounded-2xl">
+              <p className="text-sm text-[#A1A1AA]">Пользователь ограничил вам доступ к сообщениям</p>
+            </div>
+          ) : isBlockedByMe ? (
+            <div className="flex items-center justify-center p-3 bg-[#111113] border border-white/[0.06] rounded-2xl">
+              <p className="text-sm text-[#A1A1AA]">Вы заблокировали этого пользователя. <button onClick={() => unblockUserServer(activeChatUser.username)} className="text-[#22D3EE] hover:underline cursor-pointer">Разблокировать</button></p>
+            </div>
+          ) : (
+
+          <div className="flex items-center gap-2 bg-[#111113] border border-white/[0.06] focus-within:border-[#22D3EE] rounded-2xl pl-3 pr-2 py-1.5 transition-all">
             <input
               type="file"
               ref={dmFileInputRef}
@@ -650,6 +926,7 @@ export const FriendsView: React.FC = () => {
               value={chatInput}
               onChange={(e) => setChatInput(e.target.value)}
               onKeyDown={handleKeyDown}
+              onPaste={handlePasteDm}
               placeholder={`Напишите личное сообщение @${activeChatUser.username}...`}
               className="flex-1 bg-transparent border-none text-xs text-[#F5F5F7] placeholder-[#A1A1AA]/30 focus:outline-none py-2 px-1"
             />
@@ -662,6 +939,7 @@ export const FriendsView: React.FC = () => {
               <Send className="w-3.5 h-3.5" />
             </button>
           </div>
+          )}
         </div>
 
         {/* Lightbox */}
@@ -872,6 +1150,25 @@ export const FriendsView: React.FC = () => {
               <UserPlus className="w-3.5 h-3.5" />
               <span>Добавить в друзья</span>
             </button>
+
+            {isDevMode && (
+              <button
+                onClick={() => {
+                  if (currentUser?.username) {
+                    simulateIncomingMessage(
+                      currentUser.username,
+                      'Кибер-Друг',
+                      'Привет! 👋 Это тестовое входящее сообщение от друга для проверки звука уведомления и аватарки на панели!'
+                    );
+                  }
+                }}
+                className="px-4 py-2 rounded-xl text-xs font-bold transition-all flex items-center gap-2 cursor-pointer bg-[#22D3EE]/15 hover:bg-[#22D3EE]/25 text-[#22D3EE] border border-[#22D3EE]/30 shadow-sm"
+                title="Отправить симулированное сообщение от виртуального друга"
+              >
+                <Sparkles className="w-3.5 h-3.5 animate-spin" style={{ animationDuration: '4s' }} />
+                <span>🧪 Симулировать ЛС</span>
+              </button>
+            )}
           </div>
         </div>
 
@@ -950,29 +1247,78 @@ export const FriendsView: React.FC = () => {
                         <span className="hidden sm:inline">Позвонить</span>
                       </button>
 
-                      <button
-                        onClick={async () => {
-                          if (confirm(`Удалить @${friend.username} из друзей?`)) {
-                            await removeFriendServer(friend.username);
-                          }
-                        }}
-                        className="p-2.5 rounded-xl bg-white/5 hover:bg-rose-500/20 text-[#A1A1AA] hover:text-rose-400 border border-white/[0.06] hover:border-rose-500/30 transition-all cursor-pointer"
-                        title="Удалить из друзей"
-                      >
-                        <UserMinus className="w-4 h-4" />
-                      </button>
+                      <div className="relative">
+                        <button
+                          onClick={() => setOpenFriendMenuUsername(openFriendMenuUsername === friend.username ? null : friend.username)}
+                          className={`p-2.5 rounded-xl border transition-all cursor-pointer flex items-center justify-center ${
+                            openFriendMenuUsername === friend.username
+                              ? 'bg-[#22D3EE]/10 border-[#22D3EE]/30 text-[#22D3EE]'
+                              : 'bg-white/5 border-white/[0.04] text-[#A1A1AA] hover:text-[#F5F5F7] hover:bg-white/10'
+                          }`}
+                          title="Действия с другом"
+                        >
+                          <MoreVertical className="w-4 h-4" />
+                        </button>
 
-                      <button
-                        onClick={async () => {
-                          if (confirm(`Заблокировать @${friend.username}?`)) {
-                            await blockUserServer(friend.username);
-                          }
-                        }}
-                        className="p-2.5 rounded-xl bg-white/5 hover:bg-rose-600/30 text-[#A1A1AA] hover:text-rose-600 border border-white/[0.06] hover:border-rose-600/30 transition-all cursor-pointer"
-                        title="Заблокировать пользователя"
-                      >
-                        <ShieldCheck className="w-4 h-4" />
-                      </button>
+                        <AnimatePresence>
+                          {openFriendMenuUsername === friend.username && (
+                            <motion.div
+                              initial={{ opacity: 0, y: 10, scale: 0.95 }}
+                              animate={{ opacity: 1, y: 0, scale: 1 }}
+                              exit={{ opacity: 0, y: 10, scale: 0.95 }}
+                              transition={{ duration: 0.15 }}
+                              className="absolute right-0 mt-2 w-48 rounded-2xl bg-[#111113] border border-white/[0.08] p-1.5 shadow-2xl z-50 overflow-hidden"
+                            >
+                              {confirmingFriendAction ? (
+                                <div className="px-2 py-2 text-xs">
+                                  <p className="text-[#F5F5F7] mb-2 text-center leading-relaxed">
+                                    {confirmingFriendAction === 'remove' ? 'Удалить из друзей?' : 'Заблокировать?'}
+                                  </p>
+                                  <div className="flex gap-2">
+                                    <button
+                                      onClick={async () => {
+                                        if (confirmingFriendAction === 'remove') {
+                                          await removeFriendServer(friend.username);
+                                        } else if (confirmingFriendAction === 'block') {
+                                          await blockUserServer(friend.username);
+                                        }
+                                        setConfirmingFriendAction(null);
+                                        setOpenFriendMenuUsername(null);
+                                      }}
+                                      className="flex-1 py-1.5 bg-rose-500/20 text-rose-400 rounded-lg font-bold hover:bg-rose-500/30 transition-colors cursor-pointer"
+                                    >
+                                      Да
+                                    </button>
+                                    <button
+                                      onClick={() => setConfirmingFriendAction(null)}
+                                      className="flex-1 py-1.5 bg-white/10 text-white rounded-lg font-bold hover:bg-white/20 transition-colors cursor-pointer"
+                                    >
+                                      Отмена
+                                    </button>
+                                  </div>
+                                </div>
+                              ) : (
+                                <>
+                                  <button
+                                    onClick={() => setConfirmingFriendAction('remove')}
+                                    className="w-full text-left px-3 py-2 rounded-xl hover:bg-white/5 text-[#E4E4E7] text-xs font-semibold flex items-center gap-2 transition-all cursor-pointer"
+                                  >
+                                    <UserMinus className="w-4 h-4 text-slate-400 shrink-0" />
+                                    <span>Удалить из друзей</span>
+                                  </button>
+                                  <button
+                                    onClick={() => setConfirmingFriendAction('block')}
+                                    className="w-full text-left px-3 py-2 rounded-xl hover:bg-rose-500/10 text-rose-400 hover:text-rose-300 text-xs font-semibold flex items-center gap-2 transition-all cursor-pointer"
+                                  >
+                                    <ShieldCheck className="w-4 h-4 shrink-0" />
+                                    <span>Заблокировать</span>
+                                  </button>
+                                </>
+                              )}
+                            </motion.div>
+                          )}
+                        </AnimatePresence>
+                      </div>
                     </div>
                   </div>
                 ))}
@@ -1212,40 +1558,6 @@ export const FriendsView: React.FC = () => {
           </div>
         )}
       </div>
-
-      {/* Incoming Call Ringing Overlay */}
-      {incomingCall && (
-        <div className="fixed inset-0 z-50 bg-black/80 backdrop-blur-md flex items-center justify-center p-4 animate-in fade-in duration-200">
-          <div className="bg-[#121216] border border-emerald-500/40 rounded-2xl p-6 max-w-sm w-full text-center shadow-2xl shadow-emerald-500/20">
-            <div className="w-16 h-16 rounded-full bg-emerald-500/20 border-2 border-emerald-400 flex items-center justify-center mx-auto mb-4 animate-bounce">
-              <PhoneCall className="w-8 h-8 text-emerald-400" />
-            </div>
-            <h3 className="text-lg font-bold text-white mb-1">Входящий вызов</h3>
-            <p className="text-sm text-emerald-400 font-mono mb-6">
-              Пользователь @{incomingCall.callerName} вызывает вас в голосовой звонок
-            </p>
-            <div className="flex items-center gap-3 justify-center">
-              <button
-                onClick={() => {
-                  connectToVoice(incomingCall.roomId, `Звонок с @${incomingCall.callerName}`);
-                  setIncomingCall(null);
-                }}
-                className="flex-1 py-3 px-4 rounded-xl bg-emerald-500 hover:bg-emerald-400 text-black font-bold text-sm flex items-center justify-center gap-2 transition-all cursor-pointer shadow-lg shadow-emerald-500/30"
-              >
-                <Phone className="w-4 h-4" />
-                <span>Принять</span>
-              </button>
-              <button
-                onClick={() => setIncomingCall(null)}
-                className="flex-1 py-3 px-4 rounded-xl bg-rose-500/20 hover:bg-rose-500/30 border border-rose-500/40 text-rose-300 font-bold text-sm flex items-center justify-center gap-2 transition-all cursor-pointer"
-              >
-                <PhoneOff className="w-4 h-4" />
-                <span>Отклонить</span>
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
     </div>
   );
 };

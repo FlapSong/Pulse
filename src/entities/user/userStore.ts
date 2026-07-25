@@ -3,6 +3,7 @@ import { User, UserStatus, GameActivity } from '../../shared/types';
 import { CURRENT_USER } from '../../shared/config/initialData';
 import { soundService } from '../../shared/services/soundService';
 import { API_BASE } from '../../shared/api/config';
+import { useGameStore } from '../game/gameStore';
 
 export interface SavedAccount {
   id: string;
@@ -119,6 +120,7 @@ interface UserStore {
   incomingRequests: User[];
   outgoingRequests: User[];
   blockedLogins: string[];
+  blockedByLogins: string[];
   searchResults: (User & { relationship: 'friend' | 'pending_incoming' | 'pending_outgoing' | 'blocked' | 'none' })[];
 
   // Verification Flow State
@@ -137,7 +139,6 @@ interface UserStore {
   notificationsModalOpen: boolean;
   profileModalOpen: boolean;
   userInbox: PulseEmailNotification[];
-  isStreamerModeActive: boolean;
   muteHotkey: string;
   muteMicHotkey: string;
   deafenHotkey: string;
@@ -149,7 +150,6 @@ interface UserStore {
   setInboxModalOpen: (open: boolean) => void;
   setNotificationsModalOpen: (open: boolean) => void;
   setProfileModalOpen: (open: boolean) => void;
-  toggleStreamerMode: () => void;
   setMuteHotkey: (key: string) => void;
   setMuteMicHotkey: (key: string) => void;
   setDeafenHotkey: (key: string) => void;
@@ -162,6 +162,7 @@ interface UserStore {
   acceptFriendRequestServer: (targetLogin: string) => Promise<{ success: boolean; message?: string; error?: string }>;
   declineFriendRequestServer: (targetLogin: string) => Promise<{ success: boolean; message?: string; error?: string }>;
   removeFriendServer: (targetLogin: string) => Promise<{ success: boolean; message?: string; error?: string }>;
+  simulateFriendRequestServer: () => Promise<{ success: boolean; message?: string; error?: string }>;
   blockUserServer: (targetLogin: string) => Promise<{ success: boolean; message?: string; error?: string }>;
   unblockUserServer: (targetLogin: string) => Promise<{ success: boolean; message?: string; error?: string }>;
 
@@ -264,13 +265,13 @@ export const useUserStore = create<UserStore>((set, get) => {
     incomingRequests: [],
     outgoingRequests: [],
     blockedLogins: [],
+    blockedByLogins: [],
     searchResults: [],
     pendingVerification: null,
     inboxModalOpen: false,
     notificationsModalOpen: false,
     profileModalOpen: false,
     userInbox: [],
-    isStreamerModeActive: false,
     muteHotkey: 'ALT+M',
     muteMicHotkey: 'ALT+M',
     deafenHotkey: 'ALT+D',
@@ -280,6 +281,7 @@ export const useUserStore = create<UserStore>((set, get) => {
         currentUser: { ...state.currentUser, status }
       }));
       get().updateUserStatusServer(status);
+      soundService.setUserStatus(status, get().currentUser?.customStatus || '');
     },
 
     setCustomStatus: (customStatus) => {
@@ -287,10 +289,7 @@ export const useUserStore = create<UserStore>((set, get) => {
         currentUser: { ...state.currentUser, customStatus }
       }));
       get().updateUserStatusServer(get().currentUser.status, customStatus);
-    },
-
-    toggleStreamerMode: () => {
-      set((state) => ({ isStreamerModeActive: !state.isStreamerModeActive }));
+      soundService.setUserStatus(get().currentUser.status, customStatus);
     },
 
     setMuteHotkey: (muteHotkey) => {
@@ -328,6 +327,7 @@ export const useUserStore = create<UserStore>((set, get) => {
               customStatus: data.user.customStatus
             }
           }));
+          soundService.setUserStatus(data.user.status, data.user.customStatus || '');
         }
       } catch (e) {
         // silent fail
@@ -342,17 +342,28 @@ export const useUserStore = create<UserStore>((set, get) => {
         const res = await fetch(API_BASE + `/api/friends/${encodeURIComponent(currentUser.username)}`);
         const data = await res.json();
         if (data.success) {
-          const nextIncoming = data.incomingRequests || [];
+          let nextIncoming = data.incomingRequests || [];
+          let fetchedFriends = data.friends || [];
+          
+          const isDev = useGameStore.getState().isDevMode;
+          const TEST_LOGINS = ['phantom', 'cyber_friend', 'pro_gamer_777', 'speed_demon', 'shadow_ninja', 'aim_master', 'neon_pulse'];
+          
+          if (!isDev) {
+            nextIncoming = nextIncoming.filter((req: any) => !TEST_LOGINS.includes((req.senderLogin || '').toLowerCase()));
+            fetchedFriends = fetchedFriends.filter((f: any) => !TEST_LOGINS.includes((f.username || '').toLowerCase()));
+          }
+
           if (nextIncoming.length > prevIncoming.length) {
             soundService.playMessage();
           }
-          
-          let fetchedFriends = data.friends || [];
+
 
           set({
             friends: fetchedFriends,
             incomingRequests: nextIncoming,
-            outgoingRequests: data.outgoingRequests || []
+            outgoingRequests: data.outgoingRequests || [],
+            blockedLogins: data.blockedLogins || [],
+            blockedByLogins: data.blockedByLogins || []
           });
         }
       } catch (e) {
@@ -370,7 +381,13 @@ export const useUserStore = create<UserStore>((set, get) => {
         );
         const data = await res.json();
         if (data.success && Array.isArray(data.users)) {
-          set({ searchResults: data.users });
+          let users = data.users;
+          const isDev = useGameStore.getState().isDevMode;
+          const TEST_LOGINS = ['phantom', 'cyber_friend', 'pro_gamer_777', 'speed_demon', 'shadow_ninja', 'aim_master', 'neon_pulse'];
+          if (!isDev) {
+            users = users.filter((u: any) => !TEST_LOGINS.includes((u.username || '').toLowerCase()));
+          }
+          set({ searchResults: users });
         }
       } catch (e) {
         set({ searchResults: [] });
@@ -468,33 +485,73 @@ export const useUserStore = create<UserStore>((set, get) => {
       }
     },
 
+    simulateFriendRequestServer: async () => {
+      const { currentUser } = get();
+      if (!currentUser.username) {
+        return { success: false, error: 'Вы не авторизованы' };
+      }
+      try {
+        const res = await fetch(API_BASE + '/api/friends/simulate-request', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            currentLogin: currentUser.username
+          })
+        });
+        const data = await res.json();
+        if (data.success) {
+          get().fetchFriendsServer();
+          soundService.playMessage();
+          return { success: true, message: data.message };
+        }
+        return { success: false, error: data.error };
+      } catch (e) {
+        return { success: false, error: 'Ошибка сети' };
+      }
+    },
+
     blockUserServer: async (targetLogin: string) => {
       const { currentUser } = get();
       try {
-        // Simple local simulation for blocking since we don't have a backend for it specifically
-        set((state) => ({
-          blockedLogins: [...state.blockedLogins, targetLogin],
-          friends: state.friends.filter(f => f.username !== targetLogin)
-        }));
-        
-        // Also call a mock API if we want to pretend it's persistent
-        await fetch(API_BASE + '/api/friends/block', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ currentLogin: currentUser.username, targetLogin })
-        }).catch(() => {});
-
-        return { success: true, message: 'Пользователь заблокирован' };
+        const res = await fetch(API_BASE + '/api/friends/block', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ currentLogin: currentUser.username, targetLogin })
+        });
+        const data = await res.json();
+        if (data.success) {
+          set((state) => ({
+            blockedLogins: [...state.blockedLogins, targetLogin],
+            friends: state.friends.filter(f => f.username !== targetLogin)
+          }));
+          get().fetchFriendsServer();
+          return { success: true, message: data.message || 'Пользователь заблокирован' };
+        }
+        return { success: false, error: data.error };
       } catch (e) {
         return { success: false, error: 'Ошибка при блокировке' };
       }
     },
 
     unblockUserServer: async (targetLogin: string) => {
-      set((state) => ({
-        blockedLogins: state.blockedLogins.filter(l => l !== targetLogin)
-      }));
-      return { success: true, message: 'Пользователь разблокирован' };
+      const { currentUser } = get();
+      try {
+        const res = await fetch(API_BASE + '/api/friends/unblock', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ currentLogin: currentUser.username, targetLogin })
+        });
+        const data = await res.json();
+        if (data.success) {
+          set((state) => ({
+            blockedLogins: state.blockedLogins.filter(l => l !== targetLogin)
+          }));
+          return { success: true, message: data.message || 'Пользователь разблокирован' };
+        }
+        return { success: false, error: data.error };
+      } catch (e) {
+        return { success: false, error: 'Ошибка при разблокировке' };
+      }
     },
 
     setGameActivity: (gameActivity) =>
@@ -1001,3 +1058,18 @@ export const useUserStore = create<UserStore>((set, get) => {
     }
   };
 });
+
+// Sync initial user status to soundService
+const initialUser = useUserStore.getState()?.currentUser;
+if (initialUser) {
+  soundService.setUserStatus(initialUser.status, initialUser.customStatus || '');
+}
+
+// Subscribe to future state updates
+if (typeof window !== 'undefined') {
+  useUserStore.subscribe((state) => {
+    if (state.currentUser) {
+      soundService.setUserStatus(state.currentUser.status, state.currentUser.customStatus || '');
+    }
+  });
+}

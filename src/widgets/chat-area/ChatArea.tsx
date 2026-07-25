@@ -8,7 +8,7 @@ import {
   Volume2,
   Reply,
   FileCode,
-  Download, X,
+  Download, X, ArrowDown,
 } from 'lucide-react';
 import { useCommunityStore } from '../../entities/community/communityStore';
 import { useChatStore } from '../../entities/chat/chatStore';
@@ -32,13 +32,77 @@ export const ChatArea: React.FC<ChatAreaProps> = ({ onToggleMembers, showMembers
   const [showPinnedOnly, setShowPinnedOnly] = useState(false);
   const [lightboxImage, setLightboxImage] = useState<string | null>(null);
 
+  const scrollContainerRef = useRef<HTMLDivElement>(null);
   const messagesEndRef = useRef<HTMLDivElement>(null);
+  const [isNearBottom, setIsNearBottom] = useState(true);
+  const [showScrollBottomBtn, setShowScrollBottomBtn] = useState(false);
+
+  const prevMessagesCountRef = useRef<number>(0);
+  const prevLastMessageIdRef = useRef<string | null>(null);
 
   const activeChannel = getActiveChannel();
 
-  useEffect(() => {
+  // Scroll handler to check if user scrolled up
+  const handleScroll = () => {
+    const container = scrollContainerRef.current;
+    if (!container) return;
+
+    const distanceFromBottom = container.scrollHeight - container.scrollTop - container.clientHeight;
+    
+    // Within 150px is considered near the bottom
+    const nearBottom = distanceFromBottom < 150;
+    setIsNearBottom(nearBottom);
+
+    // Show button if scrolled up more than 350px
+    setShowScrollBottomBtn(distanceFromBottom > 350);
+  };
+
+  const scrollToBottom = () => {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
-  }, [messagesByChannel, activeChannel]);
+    setIsNearBottom(true);
+    setShowScrollBottomBtn(false);
+  };
+
+  // Auto-scroll on messages change - ONLY if there's a new message and we are near the bottom or it is ours
+  useEffect(() => {
+    if (!activeChannel) return;
+    const rawMessages = messagesByChannel[activeChannel.id] || [];
+    const currentCount = rawMessages.length;
+    const currentLastMessage = rawMessages[currentCount - 1];
+    const currentLastId = currentLastMessage?.id || null;
+
+    // Check if a new message actually arrived
+    const isNewMessage = currentCount > prevMessagesCountRef.current || (currentLastId !== null && currentLastId !== prevLastMessageIdRef.current);
+
+    // Update refs
+    prevMessagesCountRef.current = currentCount;
+    prevLastMessageIdRef.current = currentLastId;
+
+    if (isNewMessage) {
+      const isLastMessageMine = currentLastMessage?.author?.id === currentUser?.id || currentLastMessage?.author?.username === currentUser?.username;
+      
+      if (isNearBottom || isLastMessageMine) {
+        setTimeout(() => {
+          messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
+        }, 30);
+      }
+    }
+  }, [messagesByChannel, activeChannel, isNearBottom, currentUser]);
+
+  // Reset scroll and force to bottom on active channel change
+  useEffect(() => {
+    if (activeChannel?.id) {
+      const rawMessages = messagesByChannel[activeChannel.id] || [];
+      prevMessagesCountRef.current = rawMessages.length;
+      prevLastMessageIdRef.current = rawMessages[rawMessages.length - 1]?.id || null;
+
+      setTimeout(() => {
+        messagesEndRef.current?.scrollIntoView({ behavior: 'auto' as any });
+        setIsNearBottom(true);
+        setShowScrollBottomBtn(false);
+      }, 50);
+    }
+  }, [activeChannel?.id]);
 
   useEffect(() => {
     if (!activeChannel?.id) return;
@@ -142,7 +206,11 @@ export const ChatArea: React.FC<ChatAreaProps> = ({ onToggleMembers, showMembers
       </div>
 
       {/* Message Stream */}
-      <div className="flex-1 overflow-y-auto p-4 pb-32 space-y-3 no-scrollbar">
+      <div 
+        ref={scrollContainerRef}
+        onScroll={handleScroll}
+        className="flex-1 overflow-y-auto p-4 pb-32 space-y-3 no-scrollbar"
+      >
         {filteredMessages.length === 0 ? (
           <div className="h-full flex flex-col items-center justify-center text-center p-8">
             <div className="w-10 h-10 rounded-2xl bg-[#17171C] border border-white/[0.08] flex items-center justify-center text-[#22D3EE] mb-2">
@@ -198,7 +266,7 @@ export const ChatArea: React.FC<ChatAreaProps> = ({ onToggleMembers, showMembers
 
                 {/* Replying Snippet */}
                 {msg.replyTo && (
-                  <div className="mb-1.5 pl-2 border-l-2 border-[#22D3EE] text-xs text-[#A1A1AA] flex items-center gap-1.5">
+                  <div className="mb-1.5 pr-2 border-r-2 border-[#22D3EE] text-xs text-[#A1A1AA] flex items-center justify-end gap-1.5 flex-row-reverse">
                     <span className="text-[#22D3EE] font-semibold">
                       @{msg.replyTo.authorName}:
                     </span>
@@ -213,7 +281,7 @@ export const ChatArea: React.FC<ChatAreaProps> = ({ onToggleMembers, showMembers
 
                 {/* Attachments */}
                 {msg.attachments && msg.attachments.length > 0 && (
-                  <div className="mt-2 space-y-2 max-w-md">
+                  <div className="mt-2 space-y-2 max-w-md ml-auto">
                     {msg.attachments.map((att) => (
                       <div key={att.id}>
                         {att.type === 'image' && (
@@ -317,7 +385,7 @@ export const ChatArea: React.FC<ChatAreaProps> = ({ onToggleMembers, showMembers
 
                 {/* Message Reactions */}
                 {msg.reactions && msg.reactions.length > 0 && (
-                  <div className="flex items-center gap-1.5 mt-2 flex-wrap">
+                  <div className="flex items-center justify-end flex-row-reverse gap-1.5 mt-2 flex-wrap">
                     {msg.reactions.map((react) => {
                       const hasReacted = react.users.includes(currentUser.id);
                       return (
@@ -345,7 +413,7 @@ export const ChatArea: React.FC<ChatAreaProps> = ({ onToggleMembers, showMembers
               </div>
 
               {/* Floating Action Menu on Message Hover */}
-              <div className="absolute right-3 top-2 opacity-0 group-hover:opacity-100 transition-opacity bg-[#111113] border border-white/[0.08] rounded-xl p-1 shadow-2xl flex items-center gap-1">
+              <div className="absolute left-3 top-2 opacity-0 group-hover:opacity-100 transition-opacity bg-[#111113] border border-white/[0.08] rounded-xl p-1 shadow-2xl flex items-center gap-1 flex-row-reverse">
                 <button
                   onClick={() =>
                     toggleReaction(activeChannel.id, msg.id, '⚡', currentUser.id)
@@ -384,6 +452,16 @@ export const ChatArea: React.FC<ChatAreaProps> = ({ onToggleMembers, showMembers
         )}
         <div ref={messagesEndRef} />
       </div>
+
+      {showScrollBottomBtn && (
+        <button
+          onClick={scrollToBottom}
+          className="absolute bottom-24 right-6 bg-[#22D3EE] hover:bg-[#06b6d4] text-[#09090B] font-bold text-xs py-2 px-3.5 rounded-full shadow-2xl shadow-[#22D3EE]/30 flex items-center gap-1.5 transition-all duration-200 hover:scale-105 z-40 border border-cyan-400 cursor-pointer"
+        >
+          <ArrowDown className="w-4 h-4 animate-bounce" />
+          <span>Вниз</span>
+        </button>
+      )}
 
       {/* Chat Input Bar */}
       <ChatInput channelId={activeChannel.id} channelName={activeChannel.name} />

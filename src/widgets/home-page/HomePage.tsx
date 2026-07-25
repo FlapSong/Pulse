@@ -58,17 +58,17 @@ export const HomePage: React.FC = () => {
             <div className="space-y-3">
               <div className="inline-flex items-center gap-2 px-3 py-1.5 rounded-full bg-[#22D3EE]/10 border border-[#22D3EE]/30 text-[#22D3EE] text-xs font-bold tracking-wider uppercase">
                 <Zap className="w-3.5 h-3.5 fill-[#22D3EE] animate-pulse" />
-                <span>Игровой Оверлей Pulse Активен</span>
+                <span>Голосовая связь Pulse Активна</span>
               </div>
               <h1 className="text-2xl sm:text-3xl font-black text-[#F5F5F7] tracking-tight">
                 Добро пожаловать в Pulse, <span className="text-[#22D3EE]">{currentUser.displayName}</span>!
               </h1>
               <p className="text-xs sm:text-sm text-[#A1A1AA] leading-relaxed max-w-xl">
-                Ваша универсальная платформа для мгновенного голосового WebRTC-общения, обмена сообщениями и бесшовного оверлея прямо в игре.
+                Ваша универсальная платформа для мгновенного голосового WebRTC-общения и обмена сообщениями с друзьями.
               </p>
               <div className="pt-2 text-xs text-[#A1A1AA] font-semibold flex items-center gap-1.5">
                 <span className="inline-block w-2.5 h-2.5 rounded-full bg-emerald-500 animate-ping" />
-                <span>Используйте сочетание клавиш <kbd className="px-1.5 py-0.5 rounded bg-white/10 text-white font-mono text-[10px]">Alt + U</kbd> для открытия оверлея в любой момент!</span>
+                <span>Высококачественная голосовая связь WebRTC с интеллектуальным шумоподавлением Krisp AI</span>
               </div>
             </div>
 
@@ -87,7 +87,7 @@ export const HomePage: React.FC = () => {
         </div>
 
         {/* Quick Actions Navigation Hub */}
-        <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-4">
+        <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
           <button
             onClick={() => setActiveTab('direct_messages')}
             className="p-5 rounded-2xl bg-[#111113] hover:bg-[#17171C] border border-white/[0.04] hover:border-[#22D3EE]/30 transition-all text-left group cursor-pointer flex flex-col justify-between h-36"
@@ -101,22 +101,6 @@ export const HomePage: React.FC = () => {
                 <ArrowRight className="w-4 h-4 opacity-0 group-hover:opacity-100 group-hover:translate-x-1 transition-all" />
               </h3>
               <p className="text-[11px] text-[#A1A1AA] mt-1">Чат, аудио и видеозвонки с друзьями.</p>
-            </div>
-          </button>
-
-          <button
-            onClick={() => setActiveTab('overlay_sandbox')}
-            className="p-5 rounded-2xl bg-[#111113] hover:bg-[#17171C] border border-white/[0.04] hover:border-[#22D3EE]/30 transition-all text-left group cursor-pointer flex flex-col justify-between h-36"
-          >
-            <div className="w-10 h-10 rounded-xl bg-[#A855F7]/10 flex items-center justify-center text-[#A855F7] group-hover:scale-105 transition-transform">
-              <Gamepad2 className="w-5 h-5" />
-            </div>
-            <div>
-              <h3 className="text-sm font-bold text-[#F5F5F7] group-hover:text-[#A855F7] transition-colors flex items-center gap-1.5">
-                <span>Запустить Pulse Arena</span>
-                <ArrowRight className="w-4 h-4 opacity-0 group-hover:opacity-100 group-hover:translate-x-1 transition-all" />
-              </h3>
-              <p className="text-[11px] text-[#A1A1AA] mt-1">Протестировать игровой оверлей внутри 3D-игры.</p>
             </div>
           </button>
 

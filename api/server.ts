@@ -218,6 +218,7 @@ export interface StoredUser {
   friends?: string[]; // logins
   friendRequestsIncoming?: string[]; // logins
   friendRequestsOutgoing?: string[]; // logins
+  blockedLogins?: string[]; // logins
 }
 
 export interface StoredEmail {
@@ -231,7 +232,7 @@ export interface StoredEmail {
   read: boolean;
 }
 
-// Initial demo users
+// Initial demo user (single test account)
 const DEFAULT_USERS: StoredUser[] = [
   {
     id: 'u-phantom-001',
@@ -240,49 +241,15 @@ const DEFAULT_USERS: StoredUser[] = [
     password: '123',
     email: 'phantom@pulse.gg',
     avatar: 'https://images.unsplash.com/photo-1566492031773-4f4e44671857?w=150&auto=format&fit=crop&q=80',
-    role: 'Pro Member',
-    badge: 'CYAN SQUAD',
+    role: 'Pulse Tester',
+    badge: 'TESTER',
     isVerified: true,
     status: 'online',
-    customStatus: '⚡ В сети в Pulse',
+    customStatus: '⚡ В сети (тестовый аккаунт)',
     friends: [],
     friendRequestsIncoming: [],
     friendRequestsOutgoing: [],
     createdAt: Date.now() - 86400000
-  },
-  {
-    id: 'u-neon-002',
-    login: 'neon_rider',
-    displayName: 'Neon Rider',
-    password: '123',
-    email: 'neon@pulse.gg',
-    avatar: 'https://images.unsplash.com/photo-1535713875002-d1d0cf377fde?w=150&auto=format&fit=crop&q=80',
-    role: 'Squad Leader',
-    badge: 'NEON',
-    isVerified: true,
-    status: 'online',
-    customStatus: '🎧 Слушает трек в Pulse',
-    friends: [],
-    friendRequestsIncoming: [],
-    friendRequestsOutgoing: [],
-    createdAt: Date.now() - 172800000
-  },
-  {
-    id: 'u-cyber-003',
-    login: 'cyber_pulse',
-    displayName: 'Cyber Pulse',
-    password: '123',
-    email: 'cyber@pulse.gg',
-    avatar: 'https://images.unsplash.com/photo-1570295999919-56ceb5ecca61?w=150&auto=format&fit=crop&q=80',
-    role: 'Pulse Verified',
-    badge: 'VERIFIED',
-    isVerified: true,
-    status: 'online',
-    customStatus: '🚀 Готов к голосовой связи',
-    friends: [],
-    friendRequestsIncoming: [],
-    friendRequestsOutgoing: [],
-    createdAt: Date.now() - 259200000
   }
 ];
 
@@ -309,6 +276,7 @@ async function ensureUserExists(login: string, displayName?: string, avatar?: st
     };
     await saveUser(user);
   }
+
   return user;
 }
 
@@ -514,6 +482,28 @@ async function ensureDefaultUsers() {
         console.log(`✨ Initialized default user: ${user.login}`);
       }
     }
+
+    // Clear any test direct messages on startup so no unsolicited test message appears on load
+    try {
+      // More aggressive deletion pattern
+      await execSql("DELETE FROM direct_messages WHERE content LIKE '%тестовое%' OR content LIKE '%симулированное%' OR content LIKE '%Привет!%'");
+      if (db) {
+        const snapshot = await db.collection('direct_messages').get();
+        for (const doc of snapshot.docs) {
+          const data = doc.data();
+          if (data.content && (
+            data.content.includes('тестовое') || 
+            data.content.includes('симулированное') || 
+            data.content.includes('Привет!')
+          )) {
+            await doc.ref.delete();
+          }
+        }
+      }
+    } catch (e) {
+      console.warn('Failed to clear test direct messages on startup:', e);
+    }
+
     console.log('✅ User initialization complete.');
   } catch (err: any) {
     console.warn('⚠️ Failed to ensure default users:', err.message);
@@ -1153,11 +1143,22 @@ app.get('/api/friends/:login', async (req, res) => {
     .filter((u) => (me.friendRequestsOutgoing || []).includes(u.login))
     .map((u) => sanitizeUser(u));
 
+  const blockedList = usersList
+    .filter((u) => (me.blockedLogins || []).includes(u.login))
+    .map((u) => sanitizeUser(u));
+
+  const blockedByLogins = usersList
+    .filter((u) => (u.blockedLogins || []).includes(me.login))
+    .map((u) => u.login);
+
   res.json({
     success: true,
     friends: friendsList,
     incomingRequests: incomingList,
-    outgoingRequests: outgoingList
+    outgoingRequests: outgoingList,
+    blockedLogins: me.blockedLogins || [],
+    blockedUsers: blockedList,
+    blockedByLogins: blockedByLogins
   });
 });
 
@@ -1301,19 +1302,131 @@ app.post('/api/friends/remove', async (req, res) => {
   const normCurrent = currentLogin.trim().toLowerCase();
   const normTarget = targetLogin.trim().toLowerCase();
 
-  const me = await getUserByLogin(normCurrent);
-  const target = await getUserByLogin(normTarget);
+  const me = await ensureUserExists(normCurrent);
+  const target = await ensureUserExists(normTarget);
 
   if (me) {
-    me.friends = (me.friends || []).filter((l) => l !== normTarget);
+    me.friends = (me.friends || []).filter((l) => l.toLowerCase() !== normTarget);
     await saveUser(me);
   }
   if (target) {
-    target.friends = (target.friends || []).filter((l) => l !== normCurrent);
+    target.friends = (target.friends || []).filter((l) => l.toLowerCase() !== me.login.toLowerCase());
     await saveUser(target);
   }
 
   res.json({ success: true, message: 'Пользователь удален из друзей' });
+});
+
+// BLOCK USER
+app.post('/api/friends/block', async (req, res) => {
+  const { currentLogin, targetLogin } = req.body;
+  if (!currentLogin || !targetLogin) {
+    return res.status(400).json({ success: false, error: 'Не указаны данные' });
+  }
+
+  const normCurrent = currentLogin.trim().toLowerCase();
+  const normTarget = targetLogin.trim().toLowerCase();
+
+  const me = await ensureUserExists(normCurrent);
+  me.friends = (me.friends || []).filter((l) => l.toLowerCase() !== normTarget);
+  me.blockedLogins = me.blockedLogins || [];
+  if (!me.blockedLogins.includes(normTarget)) {
+    me.blockedLogins.push(normTarget);
+  }
+  await saveUser(me);
+
+  const target = await ensureUserExists(normTarget);
+  if (target) {
+    target.friends = (target.friends || []).filter((l) => l.toLowerCase() !== me.login.toLowerCase());
+    await saveUser(target);
+  }
+
+  res.json({ success: true, message: 'Пользователь заблокирован' });
+});
+
+// UNBLOCK USER
+app.post('/api/friends/unblock', async (req, res) => {
+  const { currentLogin, targetLogin } = req.body;
+  if (!currentLogin || !targetLogin) {
+    return res.status(400).json({ success: false, error: 'Не указаны данные' });
+  }
+
+  const normCurrent = currentLogin.trim().toLowerCase();
+  const normTarget = targetLogin.trim().toLowerCase();
+
+  const me = await ensureUserExists(normCurrent);
+  if (me.blockedLogins) {
+    me.blockedLogins = me.blockedLogins.filter((l) => l.toLowerCase() !== normTarget);
+    await saveUser(me);
+  }
+
+  res.json({ success: true, message: 'Пользователь разблокирован' });
+});
+
+// SIMULATE FRIEND REQUEST (DEVELOPER MODE ONLY)
+app.post('/api/friends/simulate-request', async (req, res) => {
+  const { currentLogin } = req.body;
+  if (!currentLogin) {
+    return res.status(400).json({ success: false, error: 'Не указан текущий логин' });
+  }
+
+  const testLogins = ['cyber_friend', 'pro_gamer_777', 'speed_demon', 'shadow_ninja', 'aim_master', 'neon_pulse'];
+  const testDisplayNames = ['Кибер-Друг', 'PRO_Gamer_777', 'SpeedDemon', 'ShadowNinja', 'AIM_Master', 'NeonPulse'];
+  const testAvatars = [
+    'https://images.unsplash.com/photo-1566492031773-4f4e44671857?w=150&auto=format&fit=crop&q=80',
+    'https://images.unsplash.com/photo-1535713875002-d1d0cf377fde?w=150&auto=format&fit=crop&q=80',
+    'https://images.unsplash.com/photo-1570295999919-56ceb5ecca61?w=150&auto=format&fit=crop&q=80',
+    'https://images.unsplash.com/photo-1633332755192-727a05c4013d?w=150&auto=format&fit=crop&q=80',
+    'https://images.unsplash.com/photo-1494790108377-be9c29b29330?w=150&auto=format&fit=crop&q=80',
+    'https://images.unsplash.com/photo-1438761681033-6461ffad8d80?w=150&auto=format&fit=crop&q=80'
+  ];
+
+  const randomIndex = Math.floor(Math.random() * testLogins.length);
+  const testLogin = testLogins[randomIndex];
+  const testDisplayName = testDisplayNames[randomIndex];
+  const testAvatar = testAvatars[randomIndex];
+
+  const me = await ensureUserExists(currentLogin.trim().toLowerCase());
+  const target = await ensureUserExists(testLogin, testDisplayName, testAvatar);
+
+  const testLoginNorm = testLogin.toLowerCase();
+  const meLoginNorm = me.login.toLowerCase();
+
+  // Ensure all arrays are initialized to prevent undefined/TypeError crashes
+  me.friends = me.friends || [];
+  me.friendRequestsIncoming = me.friendRequestsIncoming || [];
+  me.friendRequestsOutgoing = me.friendRequestsOutgoing || [];
+
+  target.friends = target.friends || [];
+  target.friendRequestsIncoming = target.friendRequestsIncoming || [];
+  target.friendRequestsOutgoing = target.friendRequestsOutgoing || [];
+
+  // Reset relationship so they aren't already friends or already requested
+  me.friends = me.friends.filter(f => f.toLowerCase() !== testLoginNorm);
+  target.friends = target.friends.filter(f => f.toLowerCase() !== meLoginNorm);
+
+  me.friendRequestsOutgoing = me.friendRequestsOutgoing.filter(f => f.toLowerCase() !== testLoginNorm);
+  me.friendRequestsIncoming = me.friendRequestsIncoming.filter(f => f.toLowerCase() !== testLoginNorm);
+
+  target.friendRequestsOutgoing = target.friendRequestsOutgoing.filter(f => f.toLowerCase() !== meLoginNorm);
+  target.friendRequestsIncoming = target.friendRequestsIncoming.filter(f => f.toLowerCase() !== meLoginNorm);
+
+  // Safely push incoming request to me, and outgoing to target
+  if (!me.friendRequestsIncoming.includes(testLoginNorm)) {
+    me.friendRequestsIncoming.push(testLoginNorm);
+  }
+  if (!target.friendRequestsOutgoing.includes(meLoginNorm)) {
+    target.friendRequestsOutgoing.push(meLoginNorm);
+  }
+
+  await saveUser(me);
+  await saveUser(target);
+
+  res.json({
+    success: true,
+    message: `Симулирован входящий запрос в друзья от @${testLogin}`,
+    sender: sanitizeUser(target)
+  });
 });
 
 // ==================== REAL CHAT MESSAGES API (SQLite) ====================
@@ -1415,29 +1528,90 @@ app.get('/api/chat/direct', async (req, res) => {
   }
 
   try {
+    const allUsers = await getUsers();
     const rows = await querySql(
       'SELECT * FROM direct_messages WHERE thread_id = ? ORDER BY timestamp ASC',
       [targetThread]
     );
 
-    const messages = rows.map((r: any) => ({
-      id: r.id,
-      threadId: r.thread_id,
-      channelId: r.thread_id,
-      author: {
-        id: r.sender_id,
-        username: r.sender_id,
-        displayName: r.sender_id,
-        avatar: ''
-      },
-      content: r.content,
-      timestamp: new Date(r.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
-      attachments: r.attachments ? JSON.parse(r.attachments) : [],
-      readStatus: Boolean(r.read_status),
-      replyTo: r.reply_to ? JSON.parse(r.reply_to) : undefined
-    }));
+    const messages = rows.map((r: any) => {
+      const senderUser = allUsers.find(
+        (u) => u.login.toLowerCase() === (r.sender_id || '').toLowerCase()
+      );
+
+      return {
+        id: r.id,
+        threadId: r.thread_id,
+        channelId: r.thread_id,
+        author: {
+          id: senderUser ? senderUser.id : r.sender_id,
+          username: senderUser ? senderUser.login : r.sender_id,
+          displayName: senderUser ? senderUser.displayName : r.sender_id,
+          avatar: senderUser && senderUser.avatar ? senderUser.avatar : 'https://images.unsplash.com/photo-1535713875002-d1d0cf377fde?w=150&auto=format&fit=crop&q=80',
+          status: senderUser ? senderUser.status : 'online',
+          customStatus: senderUser ? senderUser.customStatus : '⚡ В сети в Pulse'
+        },
+        content: r.content,
+        timestamp: new Date(r.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
+        attachments: r.attachments ? JSON.parse(r.attachments) : [],
+        readStatus: Boolean(r.read_status),
+        replyTo: r.reply_to ? JSON.parse(r.reply_to) : undefined,
+        reactions: r.reactions ? JSON.parse(r.reactions) : []
+      };
+    });
 
     res.json({ success: true, threadId: targetThread, messages });
+  } catch (err: any) {
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+// Get all Direct Messages threads for a user (for global notifications)
+app.get('/api/chat/direct/all', async (req, res) => {
+  const { username } = req.query;
+  if (!username) return res.status(400).json({ success: false, error: 'username required' });
+
+  try {
+    const allUsers = await getUsers();
+    const cleanUser = (username as string).toLowerCase();
+    const rows = await querySql(
+      `SELECT * FROM direct_messages 
+       WHERE LOWER(sender_id) = ? OR LOWER(recipient_id) = ? 
+       ORDER BY timestamp ASC`,
+      [cleanUser, cleanUser]
+    );
+
+    const messagesByThread: Record<string, any[]> = {};
+    rows.forEach((r: any) => {
+      const threadId = r.thread_id;
+      if (!messagesByThread[threadId]) {
+        messagesByThread[threadId] = [];
+      }
+      const senderUser = allUsers.find(
+        (u) => u.login.toLowerCase() === (r.sender_id || '').toLowerCase()
+      );
+      messagesByThread[threadId].push({
+        id: r.id,
+        threadId: r.thread_id,
+        channelId: r.thread_id,
+        author: {
+          id: senderUser ? senderUser.id : r.sender_id,
+          username: senderUser ? senderUser.login : r.sender_id,
+          displayName: senderUser ? senderUser.displayName : r.sender_id,
+          avatar: senderUser && senderUser.avatar ? senderUser.avatar : 'https://images.unsplash.com/photo-1535713875002-d1d0cf377fde?w=150&auto=format&fit=crop&q=80',
+          status: senderUser ? senderUser.status : 'online',
+          customStatus: senderUser ? senderUser.customStatus : '⚡ В сети в Pulse'
+        },
+        content: r.content,
+        timestamp: new Date(r.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
+        attachments: r.attachments ? JSON.parse(r.attachments) : [],
+        readStatus: Boolean(r.read_status),
+        replyTo: r.reply_to ? JSON.parse(r.reply_to) : undefined,
+        reactions: r.reactions ? JSON.parse(r.reactions) : []
+      });
+    });
+
+    res.json({ success: true, messagesByThread });
   } catch (err: any) {
     res.status(500).json({ success: false, error: err.message });
   }
@@ -1446,8 +1620,23 @@ app.get('/api/chat/direct', async (req, res) => {
 // Post Direct Message
 app.post('/api/chat/direct', async (req, res) => {
   const { senderUsername, recipientUsername, content, attachments, replyTo } = req.body;
-  if (!senderUsername || !recipientUsername || !content) {
+  if (!senderUsername || !recipientUsername || (!content && (!attachments || attachments.length === 0))) {
     return res.status(400).json({ success: false, error: 'Missing direct message fields' });
+  }
+
+  const allUsers = await getUsers();
+  const senderUser = allUsers.find(
+    (u) => u.login.toLowerCase() === senderUsername.toLowerCase()
+  );
+  const recipientUser = allUsers.find(
+    (u) => u.login.toLowerCase() === recipientUsername.toLowerCase()
+  );
+
+  if (senderUser && senderUser.blockedLogins && senderUser.blockedLogins.includes(recipientUsername.toLowerCase())) {
+    return res.status(400).json({ success: false, error: 'Вы заблокировали этого пользователя' });
+  }
+  if (recipientUser && recipientUser.blockedLogins && recipientUser.blockedLogins.includes(senderUsername.toLowerCase())) {
+    return res.status(400).json({ success: false, error: 'Пользователь заблокировал вас' });
   }
 
   const threadId = ['dm', senderUsername, recipientUsername].sort().join('-');
@@ -1456,18 +1645,24 @@ app.post('/api/chat/direct', async (req, res) => {
 
   try {
     await execSql(
-      `INSERT INTO direct_messages (id, thread_id, sender_id, recipient_id, content, timestamp, attachments, read_status, reply_to)
-       VALUES (?, ?, ?, ?, ?, ?, ?, 0, ?)`,
+      `INSERT INTO direct_messages (id, thread_id, sender_id, recipient_id, content, timestamp, attachments, read_status, reply_to, reactions)
+       VALUES (?, ?, ?, ?, ?, ?, ?, 0, ?, ?)`,
       [
         id,
         threadId,
         senderUsername,
         recipientUsername,
-        content,
+        content || '',
         timestamp,
         JSON.stringify(attachments || []),
-        replyTo ? JSON.stringify(replyTo) : null
+        replyTo ? JSON.stringify(replyTo) : null,
+        JSON.stringify([])
       ]
+    );
+
+    const allUsers = await getUsers();
+    const senderUser = allUsers.find(
+      (u) => u.login.toLowerCase() === senderUsername.toLowerCase()
     );
 
     const created = {
@@ -1475,18 +1670,108 @@ app.post('/api/chat/direct', async (req, res) => {
       channelId: threadId,
       threadId,
       author: {
-        id: senderUsername,
-        username: senderUsername,
-        displayName: senderUsername,
-        avatar: ''
+        id: senderUser ? senderUser.id : senderUsername,
+        username: senderUser ? senderUser.login : senderUsername,
+        displayName: senderUser ? senderUser.displayName : senderUsername,
+        avatar: senderUser && senderUser.avatar ? senderUser.avatar : 'https://images.unsplash.com/photo-1535713875002-d1d0cf377fde?w=150&auto=format&fit=crop&q=80',
+        status: senderUser ? senderUser.status : 'online'
       },
-      content,
+      content: content || '',
       timestamp: new Date(timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
       attachments: attachments || [],
+      reactions: [],
       replyTo
     };
 
     res.json({ success: true, threadId, message: created });
+  } catch (err: any) {
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+// Clear Direct Messages Thread
+app.post('/api/chat/direct/clear', async (req, res) => {
+  const { currentUsername, targetUsername } = req.body;
+  if (!currentUsername || !targetUsername) {
+    return res.status(400).json({ success: false, error: 'Usernames required' });
+  }
+
+  try {
+    const cleanCurrent = currentUsername.toLowerCase();
+    const cleanTarget = targetUsername.toLowerCase();
+    await execSql(
+      'DELETE FROM direct_messages WHERE (LOWER(sender_id) = ? AND LOWER(recipient_id) = ?) OR (LOWER(sender_id) = ? AND LOWER(recipient_id) = ?)',
+      [cleanCurrent, cleanTarget, cleanTarget, cleanCurrent]
+    );
+    res.json({ success: true, message: 'История чата успешно очищена' });
+  } catch (err: any) {
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+// Toggle Reaction on a message (either channel message or direct message)
+app.post('/api/chat/reaction', async (req, res) => {
+  const { channelId, messageId, emoji, userId } = req.body;
+  if (!channelId || !messageId || !emoji || !userId) {
+    return res.status(400).json({ success: false, error: 'Missing required parameters' });
+  }
+
+  const isDm = channelId.startsWith('dm-');
+  const tableName = isDm ? 'direct_messages' : 'messages';
+
+  try {
+    // Find the message
+    const rows = await querySql(`SELECT reactions FROM ${tableName} WHERE id = ?`, [messageId]);
+    if (rows.length === 0) {
+      return res.status(404).json({ success: false, error: 'Message not found' });
+    }
+
+    let reactions: any[] = [];
+    if (rows[0].reactions) {
+      try {
+        reactions = JSON.parse(rows[0].reactions);
+      } catch (e) {
+        reactions = [];
+      }
+    }
+
+    const existingReactionIndex = reactions.findIndex((r) => r.emoji === emoji);
+    if (existingReactionIndex > -1) {
+      const reaction = reactions[existingReactionIndex];
+      const hasUser = reaction.users.includes(userId);
+
+      if (hasUser) {
+        // Remove reaction
+        const newUsers = reaction.users.filter((id: string) => id !== userId);
+        if (newUsers.length === 0) {
+          reactions = reactions.filter((_, idx) => idx !== existingReactionIndex);
+        } else {
+          reactions[existingReactionIndex] = {
+            ...reaction,
+            count: reaction.count - 1,
+            users: newUsers
+          };
+        }
+      } else {
+        // Add user to existing emoji reaction
+        reactions[existingReactionIndex] = {
+          ...reaction,
+          count: reaction.count + 1,
+          users: [...reaction.users, userId]
+        };
+      }
+    } else {
+      // New emoji reaction
+      reactions.push({ emoji, count: 1, users: [userId] });
+    }
+
+    // Save back to DB
+    await execSql(
+      `UPDATE ${tableName} SET reactions = ? WHERE id = ?`,
+      [JSON.stringify(reactions), messageId]
+    );
+
+    res.json({ success: true, reactions });
   } catch (err: any) {
     res.status(500).json({ success: false, error: err.message });
   }
