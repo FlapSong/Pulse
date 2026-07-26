@@ -21,6 +21,7 @@ import { useVoiceStore } from '../../entities/voice/voiceStore';
 import { useGameStore } from '../../entities/game/gameStore';
 import { useChatStore } from '../../entities/chat/chatStore';
 import { Avatar } from '../../shared/ui/Avatar';
+import { getDmThreadId } from '../../shared/api/config';
 
 export const AppSidebar: React.FC = () => {
   const { communities, activeCommunityId, activeTab, setActiveCommunity, setActiveTab } =
@@ -42,7 +43,7 @@ export const AppSidebar: React.FC = () => {
     .filter(([channelId, count]) => channelId.startsWith('dm-') && count > 0)
     .map(([channelId, count]) => {
       let friend = friends.find(f => {
-        const expectedId = ['dm', currentUser.username, f.username].sort().join('-');
+        const expectedId = getDmThreadId(currentUser.username, f.username);
         return expectedId === channelId;
       });
 

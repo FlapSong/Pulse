@@ -40,7 +40,7 @@ import { useChatStore } from '../../entities/chat/chatStore';
 import { useGameStore } from '../../entities/game/gameStore';
 import { AudioWaveform } from '../../shared/ui/AudioWaveform';
 import { UserStatus } from '../../shared/types';
-import { API_BASE } from '../../shared/api/config';
+import { API_BASE, getDmThreadId } from '../../shared/api/config';
 
 import { AnimatedBackground } from '../../shared/ui/AnimatedBackground';
 
@@ -158,7 +158,7 @@ export const FriendsView: React.FC = () => {
   // Auto-scroll on direct messages change - ONLY if there's a new message and we are near the bottom or it is ours
   useEffect(() => {
     if (!activeChatUser || !currentUser.username) return;
-    const threadId = ['dm', currentUser.username, activeChatUser.username].sort().join('-');
+    const threadId = getDmThreadId(currentUser.username, activeChatUser.username);
     const threadMessages = messagesByChannel[threadId] || [];
     const currentCount = threadMessages.length;
     const currentLastMessage = threadMessages[currentCount - 1];
@@ -185,7 +185,7 @@ export const FriendsView: React.FC = () => {
   // Reset scroll and force to bottom on active DM user change
   useEffect(() => {
     if (activeChatUser?.username && currentUser.username) {
-      const threadId = ['dm', currentUser.username, activeChatUser.username].sort().join('-');
+      const threadId = getDmThreadId(currentUser.username, activeChatUser.username);
       const threadMessages = messagesByChannel[threadId] || [];
       prevDmCountRef.current = threadMessages.length;
       prevDmLastIdRef.current = threadMessages[threadMessages.length - 1]?.id || null;
@@ -211,7 +211,7 @@ export const FriendsView: React.FC = () => {
   useEffect(() => {
     if (!activeChatUser || !currentUser.username) return;
     
-    const threadId = ['dm', currentUser.username, activeChatUser.username].sort().join('-');
+    const threadId = getDmThreadId(currentUser.username, activeChatUser.username);
     markAsRead(threadId);
 
     fetchDirectMessages(currentUser.username, activeChatUser.username);
@@ -308,13 +308,13 @@ export const FriendsView: React.FC = () => {
 
   useEffect(() => {
     if (activeChatUser) {
-        const threadId = ['dm', currentUser.username, activeChatUser.username].sort().join('-');
+        const threadId = getDmThreadId(currentUser.username, activeChatUser.username);
         markAsRead(threadId);
     }
   }, [activeChatUser, markAsRead, currentUser.username]);
 
   if (activeChatUser) {
-    const threadId = ['dm', currentUser.username, activeChatUser.username].sort().join('-');
+    const threadId = getDmThreadId(currentUser.username, activeChatUser.username);
     const threadMessages = messagesByChannel[threadId] || [];
 
     const handleSendDm = () => {
@@ -516,7 +516,7 @@ export const FriendsView: React.FC = () => {
                           <button
                             onClick={async () => {
                               if (confirmingAction === 'clear' && currentUser?.username && activeChatUser) {
-                                const threadId = ['dm', currentUser.username, activeChatUser.username].sort().join('-');
+                                const threadId = getDmThreadId(currentUser.username, activeChatUser.username);
                                 await clearDirectMessagesServer(threadId, currentUser.username, activeChatUser.username);
                               } else if (confirmingAction === 'remove' && activeChatUser) {
                                 const res = await removeFriendServer(activeChatUser.username);

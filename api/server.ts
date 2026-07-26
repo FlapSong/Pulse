@@ -1639,7 +1639,9 @@ app.post('/api/chat/direct', async (req, res) => {
     return res.status(400).json({ success: false, error: 'Пользователь заблокировал вас' });
   }
 
-  const threadId = ['dm', senderUsername, recipientUsername].sort().join('-');
+  const cleanSender = senderUsername.toLowerCase().trim();
+  const cleanRecipient = recipientUsername.toLowerCase().trim();
+  const threadId = ['dm', cleanSender, cleanRecipient].sort().join('-');
   const id = `dm-${Date.now()}-${Math.floor(Math.random() * 1000)}`;
   const timestamp = Date.now();
 
@@ -1697,33 +1699,41 @@ app.post('/api/chat/direct/clear', async (req, res) => {
   }
 
   try {
-    const cleanCurrent = currentUsername.toLowerCase();
-    const cleanTarget = targetUsername.toLowerCase();
-    console.log(`Clearing chat between ${cleanCurrent} and ${cleanTarget}`);
+    const cleanCurrent = currentUsername.toLowerCase().trim();
+    const cleanTarget = targetUsername.toLowerCase().trim();
+    const threadId1 = ['dm', cleanCurrent, cleanTarget].sort().join('-');
+    const threadId2 = ['dm', currentUsername, targetUsername].sort().join('-');
+
+    console.log(`Clearing chat between ${cleanCurrent} and ${cleanTarget}, threads: ${threadId1}, ${threadId2}`);
     const result = await execSql(
-      'DELETE FROM direct_messages WHERE (LOWER(sender_id) = ? AND LOWER(recipient_id) = ?) OR (LOWER(sender_id) = ? AND LOWER(recipient_id) = ?)',
-      [cleanCurrent, cleanTarget, cleanTarget, cleanCurrent]
+      `DELETE FROM direct_messages 
+       WHERE LOWER(thread_id) = LOWER(?) 
+          OR LOWER(thread_id) = LOWER(?) 
+          OR (LOWER(sender_id) = ? AND LOWER(recipient_id) = ?) 
+          OR (LOWER(sender_id) = ? AND LOWER(recipient_id) = ?)`,
+      [threadId1, threadId2, cleanCurrent, cleanTarget, cleanTarget, cleanCurrent]
     );
     console.log('SQLite delete result:', result);
 
-    // Also delete from Firestore if connected
+    // Also delete from Firestore if connected (safe non-blocking try/catch)
     if (db) {
-      console.log('Firestore connected, deleting from Firestore...');
-      const threadIds = [
-        ['dm', cleanCurrent, cleanTarget].sort().join('-'),
-        ['dm', cleanTarget, cleanCurrent].sort().join('-')
-      ];
-      // Firestore 'in' query supports up to 30 elements, we only have 2
-      const snapshot = await db.collection('direct_messages').where('thread_id', 'in', threadIds).get();
-      console.log(`Found ${snapshot.docs.length} docs in Firestore`);
-      for (const doc of snapshot.docs) {
-        await doc.ref.delete();
+      try {
+        console.log('Firestore connected, deleting from Firestore...');
+        const threadIds = Array.from(new Set([threadId1, threadId2]));
+        const snapshot = await db.collection('direct_messages').where('thread_id', 'in', threadIds).get();
+        console.log(`Found ${snapshot.docs.length} docs in Firestore to delete`);
+        for (const doc of snapshot.docs) {
+          await doc.ref.delete();
+        }
+      } catch (fsErr: any) {
+        console.warn('Firestore deletion non-fatal warning:', fsErr?.message || fsErr);
       }
     }
 
     res.json({ success: true, message: 'История чата успешно очищена' });
   } catch (err: any) {
-    res.status(500).json({ success: false, error: err.message });
+    console.error('Failed to clear chat:', err);
+    res.status(500).json({ success: false, error: err?.message || 'Server error' });
   }
 });
 

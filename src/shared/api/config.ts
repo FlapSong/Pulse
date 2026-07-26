@@ -31,3 +31,10 @@ export const getApiBase = () => {
 };
 
 export const API_BASE = getApiBase();
+
+export const getDmThreadId = (user1?: string, user2?: string): string => {
+  if (!user1 || !user2) return '';
+  const clean1 = user1.toLowerCase().trim();
+  const clean2 = user2.toLowerCase().trim();
+  return ['dm', clean1, clean2].sort().join('-');
+};

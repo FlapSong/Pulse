@@ -4,7 +4,7 @@ import { INITIAL_MESSAGES } from '../../shared/config/initialData';
 import { soundService } from '../../shared/services/soundService';
 import { useUserStore } from '../user/userStore';
 import { useGameStore } from '../game/gameStore';
-import { API_BASE } from '../../shared/api/config';
+import { API_BASE, getDmThreadId } from '../../shared/api/config';
 
 interface ChatStore {
   messagesByChannel: Record<string, Message[]>;
@@ -54,7 +54,7 @@ export const useChatStore = create<ChatStore>((set, get) => ({
 
   fetchDirectMessages: async (senderUsername: string, recipientUsername: string) => {
     if (!senderUsername || !recipientUsername) return;
-    const threadId = ['dm', senderUsername, recipientUsername].sort().join('-');
+    const threadId = getDmThreadId(senderUsername, recipientUsername);
     try {
       const res = await fetch(`/api/chat/direct?user1=${encodeURIComponent(senderUsername)}&user2=${encodeURIComponent(recipientUsername)}`);
       const data = await res.json();
@@ -157,6 +157,7 @@ export const useChatStore = create<ChatStore>((set, get) => ({
   },
 
   clearDirectMessagesServer: async (threadId: string, currentUsername: string, targetUsername: string) => {
+    const calcThreadId = getDmThreadId(currentUsername, targetUsername);
     try {
       const res = await fetch(API_BASE + '/api/chat/direct/clear', {
         method: 'POST',
@@ -165,12 +166,25 @@ export const useChatStore = create<ChatStore>((set, get) => ({
       });
       const data = await res.json();
       if (data.success) {
-        set((state) => ({
-          messagesByChannel: {
-            ...state.messagesByChannel,
-            [threadId]: []
-          }
-        }));
+        set((state) => {
+          const updatedMessages = { ...state.messagesByChannel };
+          updatedMessages[calcThreadId] = [];
+          if (threadId) updatedMessages[threadId] = [];
+          
+          // Clear any key containing both usernames
+          const c1 = currentUsername.toLowerCase();
+          const c2 = targetUsername.toLowerCase();
+          Object.keys(updatedMessages).forEach((key) => {
+            const lowerKey = key.toLowerCase();
+            if (lowerKey.includes(c1) && lowerKey.includes(c2)) {
+              updatedMessages[key] = [];
+            }
+          });
+
+          return {
+            messagesByChannel: updatedMessages
+          };
+        });
       } else {
         console.error('Failed to clear direct messages (server error):', data.error);
       }
@@ -286,7 +300,7 @@ export const useChatStore = create<ChatStore>((set, get) => ({
         // Automatically clear unread badge for this friend's direct message thread
         const currentUsername = useUserStore.getState().currentUser?.username;
         if (currentUsername && user.username) {
-          const threadId = ['dm', currentUsername, user.username].sort().join('-');
+          const threadId = getDmThreadId(currentUsername, user.username);
           const newCounts = { ...state.unreadCounts };
           delete newCounts[threadId];
           return { activeChatUser: user, unreadCounts: newCounts };
