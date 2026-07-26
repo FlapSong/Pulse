@@ -1699,32 +1699,73 @@ app.post('/api/chat/direct/clear', async (req, res) => {
   }
 
   try {
-    const cleanCurrent = currentUsername.toLowerCase().trim();
-    const cleanTarget = targetUsername.toLowerCase().trim();
-    const threadId1 = ['dm', cleanCurrent, cleanTarget].sort().join('-');
-    const threadId2 = ['dm', currentUsername, targetUsername].sort().join('-');
+    const allUsers = await getUsers();
+    const c1Str = currentUsername.toLowerCase().trim();
+    const c2Str = targetUsername.toLowerCase().trim();
 
-    console.log(`Clearing chat between ${cleanCurrent} and ${cleanTarget}, threads: ${threadId1}, ${threadId2}`);
-    const result = await execSql(
-      `DELETE FROM direct_messages 
-       WHERE LOWER(thread_id) = LOWER(?) 
-          OR LOWER(thread_id) = LOWER(?) 
-          OR (LOWER(sender_id) = ? AND LOWER(recipient_id) = ?) 
-          OR (LOWER(sender_id) = ? AND LOWER(recipient_id) = ?)`,
-      [threadId1, threadId2, cleanCurrent, cleanTarget, cleanTarget, cleanCurrent]
+    const u1Obj = allUsers.find(
+      (u) => u.login.toLowerCase() === c1Str || u.id.toLowerCase() === c1Str
     );
+    const u2Obj = allUsers.find(
+      (u) => u.login.toLowerCase() === c2Str || u.id.toLowerCase() === c2Str
+    );
+
+    const u1Keys = Array.from(new Set([
+      c1Str,
+      u1Obj?.login?.toLowerCase().trim(),
+      u1Obj?.id?.toLowerCase().trim()
+    ].filter(Boolean) as string[]));
+
+    const u2Keys = Array.from(new Set([
+      c2Str,
+      u2Obj?.login?.toLowerCase().trim(),
+      u2Obj?.id?.toLowerCase().trim()
+    ].filter(Boolean) as string[]));
+
+    console.log(`Clearing chat between keys [${u1Keys.join(', ')}] and [${u2Keys.join(', ')}]`);
+
+    const sql = `
+      DELETE FROM direct_messages 
+      WHERE (LOWER(sender_id) IN (${u1Keys.map(() => '?').join(',')}) AND LOWER(recipient_id) IN (${u2Keys.map(() => '?').join(',')}))
+         OR (LOWER(sender_id) IN (${u2Keys.map(() => '?').join(',')}) AND LOWER(recipient_id) IN (${u1Keys.map(() => '?').join(',')}))
+         OR (LOWER(thread_id) LIKE ? AND LOWER(thread_id) LIKE ?)
+    `;
+    const params = [
+      ...u1Keys,
+      ...u2Keys,
+      ...u2Keys,
+      ...u1Keys,
+      `%${c1Str}%`,
+      `%${c2Str}%`
+    ];
+
+    const result = await execSql(sql, params);
     console.log('SQLite delete result:', result);
 
     // Also delete from Firestore if connected (safe non-blocking try/catch)
     if (db) {
       try {
-        console.log('Firestore connected, deleting from Firestore...');
-        const threadIds = Array.from(new Set([threadId1, threadId2]));
-        const snapshot = await db.collection('direct_messages').where('thread_id', 'in', threadIds).get();
-        console.log(`Found ${snapshot.docs.length} docs in Firestore to delete`);
+        console.log('Firestore connected, deleting direct_messages docs...');
+        const snapshot = await db.collection('direct_messages').get();
+        let deletedFsCount = 0;
         for (const doc of snapshot.docs) {
-          await doc.ref.delete();
+          const data = doc.data();
+          const s = (data.sender_id || '').toLowerCase();
+          const r = (data.recipient_id || '').toLowerCase();
+          const t = (data.thread_id || '').toLowerCase();
+
+          const isU1Sender = u1Keys.includes(s);
+          const isU2Sender = u2Keys.includes(s);
+          const isU1Recip = u1Keys.includes(r);
+          const isU2Recip = u2Keys.includes(r);
+          const matchesThread = t.includes(c1Str) && t.includes(c2Str);
+
+          if ((isU1Sender && isU2Recip) || (isU2Sender && isU1Recip) || matchesThread) {
+            await doc.ref.delete();
+            deletedFsCount++;
+          }
         }
+        console.log(`Deleted ${deletedFsCount} docs from Firestore`);
       } catch (fsErr: any) {
         console.warn('Firestore deletion non-fatal warning:', fsErr?.message || fsErr);
       }

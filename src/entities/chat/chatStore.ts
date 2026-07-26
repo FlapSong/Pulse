@@ -93,19 +93,22 @@ export const useChatStore = create<ChatStore>((set, get) => ({
           const updatedUnreadCounts = { ...state.unreadCounts };
           let shouldPlaySound = false;
 
-          Object.entries(data.messagesByThread as Record<string, Message[]>).forEach(([threadId, rawMsgs]) => {
-            const newMsgs = rawMsgs.filter(m => !m.content.includes('тестовое') && !m.content.includes('симулированное'));
-            const isDev = useGameStore.getState().isDevMode;
-            const TEST_LOGINS = ['phantom', 'cyber_friend', 'pro_gamer_777', 'speed_demon', 'shadow_ninja', 'aim_master', 'neon_pulse'];
-            
-            // Filter out threads from test users if not in dev mode
-            if (!isDev) {
-              const otherUser = threadId.split('-').find(u => u !== 'dm' && u !== currentUsername.toLowerCase());
-              if (otherUser && TEST_LOGINS.includes(otherUser)) {
-                return;
+          const backendThreads = data.messagesByThread as Record<string, Message[]>;
+          const backendThreadKeys = Object.keys(backendThreads);
+
+          // Clear any DM channels in local state that no longer exist on backend (e.g. after clearing chat)
+          Object.keys(updatedMessagesByChannel).forEach((key) => {
+            const lowerKey = key.toLowerCase();
+            if (lowerKey.startsWith('dm') || lowerKey.includes('-dm-') || lowerKey.includes('dm-')) {
+              if (!backendThreadKeys.includes(key)) {
+                updatedMessagesByChannel[key] = [];
+                delete updatedUnreadCounts[key];
               }
             }
+          });
 
+          Object.entries(backendThreads).forEach(([threadId, rawMsgs]) => {
+            const newMsgs = rawMsgs || [];
             const prevMsgs = state.messagesByChannel[threadId];
             const isFirstFetchForThread = prevMsgs === undefined;
             const prevMsgsArr = prevMsgs || [];
@@ -157,35 +160,43 @@ export const useChatStore = create<ChatStore>((set, get) => ({
   },
 
   clearDirectMessagesServer: async (threadId: string, currentUsername: string, targetUsername: string) => {
+    if (!currentUsername || !targetUsername) return;
     const calcThreadId = getDmThreadId(currentUsername, targetUsername);
+    const c1 = currentUsername.toLowerCase().trim();
+    const c2 = targetUsername.toLowerCase().trim();
+
+    // 1. Immediately purge from local Zustand state for instant UI update
+    set((state) => {
+      const updatedMessages = { ...state.messagesByChannel };
+      const updatedUnread = { ...state.unreadCounts };
+
+      Object.keys(updatedMessages).forEach((key) => {
+        const lowerKey = key.toLowerCase();
+        if (
+          (lowerKey.includes(c1) && lowerKey.includes(c2)) ||
+          key === threadId ||
+          key === calcThreadId
+        ) {
+          updatedMessages[key] = [];
+          delete updatedUnread[key];
+        }
+      });
+
+      return {
+        messagesByChannel: updatedMessages,
+        unreadCounts: updatedUnread
+      };
+    });
+
+    // 2. Call backend API to delete from SQLite and Firestore
     try {
-      const res = await fetch(API_BASE + '/api/chat/direct/clear', {
+      const res = await fetch('/api/chat/direct/clear', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ currentUsername, targetUsername })
       });
       const data = await res.json();
-      if (data.success) {
-        set((state) => {
-          const updatedMessages = { ...state.messagesByChannel };
-          updatedMessages[calcThreadId] = [];
-          if (threadId) updatedMessages[threadId] = [];
-          
-          // Clear any key containing both usernames
-          const c1 = currentUsername.toLowerCase();
-          const c2 = targetUsername.toLowerCase();
-          Object.keys(updatedMessages).forEach((key) => {
-            const lowerKey = key.toLowerCase();
-            if (lowerKey.includes(c1) && lowerKey.includes(c2)) {
-              updatedMessages[key] = [];
-            }
-          });
-
-          return {
-            messagesByChannel: updatedMessages
-          };
-        });
-      } else {
+      if (!data.success) {
         console.error('Failed to clear direct messages (server error):', data.error);
       }
     } catch (e) {
