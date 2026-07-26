@@ -256,23 +256,25 @@ export const FriendsView: React.FC = () => {
   }, []);
 
   const handleStartCall = (friendUsername: string, friendDisplayName: string) => {
-    const roomId = ['call', currentUser.username, friendUsername].sort().join('-');
+    const c1 = currentUser.username.toLowerCase().trim();
+    const c2 = friendUsername.toLowerCase().trim();
+    const roomId = ['call', c1, c2].sort().join('-');
     connectToVoice(roomId, `Звонок: ${friendDisplayName}`);
 
     // Send ring signal to recipient so their client pops up incoming call modal
-    fetch(API_BASE + '/api/calls/signal', {
+    fetch('/api/calls/signal', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
         roomId,
         senderId: currentUser.username,
-        targetId: friendUsername,
+        targetId: c2,
         type: 'ring',
-        payload: { callerName: currentUser.displayName || currentUser.username }
+        payload: { callerName: currentUser.displayName || currentUser.username, avatar: currentUser.avatar }
       })
     }).catch(() => {});
 
-    const friend = friends.find((f) => f.username === friendUsername);
+    const friend = friends.find((f) => f.username.toLowerCase() === c2);
     if (friend) {
       setActiveChatUser(friend);
     }

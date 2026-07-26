@@ -1520,7 +1520,7 @@ app.get('/api/chat/direct', async (req, res) => {
   let targetThread = threadId as string;
 
   if (!targetThread && user1 && user2) {
-    targetThread = ['dm', user1, user2].sort().join('-');
+    targetThread = ['dm', (user1 as string).toLowerCase().trim(), (user2 as string).toLowerCase().trim()].sort().join('-');
   }
 
   if (!targetThread) {
@@ -1529,9 +1529,16 @@ app.get('/api/chat/direct', async (req, res) => {
 
   try {
     const allUsers = await getUsers();
+    const u1Str = (user1 || '').toString().toLowerCase().trim();
+    const u2Str = (user2 || '').toString().toLowerCase().trim();
+
     const rows = await querySql(
-      'SELECT * FROM direct_messages WHERE thread_id = ? ORDER BY timestamp ASC',
-      [targetThread]
+      `SELECT * FROM direct_messages 
+       WHERE LOWER(thread_id) = LOWER(?) 
+          OR (LOWER(sender_id) = ? AND LOWER(recipient_id) = ?) 
+          OR (LOWER(sender_id) = ? AND LOWER(recipient_id) = ?)
+       ORDER BY timestamp ASC`,
+      [targetThread, u1Str, u2Str, u2Str, u1Str]
     );
 
     const messages = rows.map((r: any) => {
@@ -1539,10 +1546,12 @@ app.get('/api/chat/direct', async (req, res) => {
         (u) => u.login.toLowerCase() === (r.sender_id || '').toLowerCase()
       );
 
+      const normThread = ['dm', (r.sender_id || '').toLowerCase().trim(), (r.recipient_id || '').toLowerCase().trim()].sort().join('-');
+
       return {
         id: r.id,
-        threadId: r.thread_id,
-        channelId: r.thread_id,
+        threadId: normThread,
+        channelId: normThread,
         author: {
           id: senderUser ? senderUser.id : r.sender_id,
           username: senderUser ? senderUser.login : r.sender_id,
@@ -1573,7 +1582,7 @@ app.get('/api/chat/direct/all', async (req, res) => {
 
   try {
     const allUsers = await getUsers();
-    const cleanUser = (username as string).toLowerCase();
+    const cleanUser = (username as string).toLowerCase().trim();
     const rows = await querySql(
       `SELECT * FROM direct_messages 
        WHERE LOWER(sender_id) = ? OR LOWER(recipient_id) = ? 
@@ -1583,17 +1592,20 @@ app.get('/api/chat/direct/all', async (req, res) => {
 
     const messagesByThread: Record<string, any[]> = {};
     rows.forEach((r: any) => {
-      const threadId = r.thread_id;
+      const s = (r.sender_id || '').toLowerCase().trim();
+      const rec = (r.recipient_id || '').toLowerCase().trim();
+      const threadId = ['dm', s, rec].sort().join('-');
+
       if (!messagesByThread[threadId]) {
         messagesByThread[threadId] = [];
       }
       const senderUser = allUsers.find(
-        (u) => u.login.toLowerCase() === (r.sender_id || '').toLowerCase()
+        (u) => u.login.toLowerCase() === s
       );
       messagesByThread[threadId].push({
         id: r.id,
-        threadId: r.thread_id,
-        channelId: r.thread_id,
+        threadId,
+        channelId: threadId,
         author: {
           id: senderUser ? senderUser.id : r.sender_id,
           username: senderUser ? senderUser.login : r.sender_id,
@@ -1881,11 +1893,14 @@ app.get('/api/calls/signals', async (req, res) => {
   const sinceTime = Number(since) || 0;
 
   try {
+    const cleanRoom = roomId.toLowerCase().trim();
+    const cleanUser = (userId || '').toString().toLowerCase().trim();
+
     const rows = await querySql(
       `SELECT * FROM call_signals 
-       WHERE room_id = ? AND timestamp > ? AND sender_id != ?
+       WHERE LOWER(room_id) = ? AND timestamp > ? AND LOWER(sender_id) != ?
        ORDER BY timestamp ASC`,
-      [roomId, sinceTime, userId || '']
+      [cleanRoom, sinceTime, cleanUser]
     );
 
     const signals = rows.map((r: any) => ({
@@ -1911,14 +1926,16 @@ app.get('/api/calls/incoming', async (req, res) => {
     return res.status(400).json({ success: false, error: 'userId required' });
   }
 
-  const recentCutoff = Date.now() - 15000; // last 15 seconds
+  const recentCutoff = Date.now() - 20000; // last 20 seconds
 
   try {
+    const cleanUser = userId.toLowerCase().trim();
+
     const rows = await querySql(
       `SELECT * FROM call_signals 
-       WHERE target_id = ? AND type = 'ring' AND timestamp > ?
+       WHERE LOWER(target_id) = ? AND type = 'ring' AND timestamp > ?
        ORDER BY timestamp DESC LIMIT 5`,
-      [userId, recentCutoff]
+      [cleanUser, recentCutoff]
     );
 
     const calls = rows.map((r: any) => ({

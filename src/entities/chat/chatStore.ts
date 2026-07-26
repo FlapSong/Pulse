@@ -94,20 +94,9 @@ export const useChatStore = create<ChatStore>((set, get) => ({
           let shouldPlaySound = false;
 
           const backendThreads = data.messagesByThread as Record<string, Message[]>;
-          const backendThreadKeys = Object.keys(backendThreads);
 
-          // Clear any DM channels in local state that no longer exist on backend (e.g. after clearing chat)
-          Object.keys(updatedMessagesByChannel).forEach((key) => {
-            const lowerKey = key.toLowerCase();
-            if (lowerKey.startsWith('dm') || lowerKey.includes('-dm-') || lowerKey.includes('dm-')) {
-              if (!backendThreadKeys.includes(key)) {
-                updatedMessagesByChannel[key] = [];
-                delete updatedUnreadCounts[key];
-              }
-            }
-          });
-
-          Object.entries(backendThreads).forEach(([threadId, rawMsgs]) => {
+          Object.entries(backendThreads).forEach(([rawThreadId, rawMsgs]) => {
+            const threadId = rawThreadId.toLowerCase();
             const newMsgs = rawMsgs || [];
             const prevMsgs = state.messagesByChannel[threadId];
             const isFirstFetchForThread = prevMsgs === undefined;
@@ -128,7 +117,7 @@ export const useChatStore = create<ChatStore>((set, get) => ({
                 const isChattingWithThisSender =
                   isCurrentTabDm &&
                   activeDmUsername &&
-                  threadId.toLowerCase().includes(activeDmUsername);
+                  threadId.includes(activeDmUsername);
 
                 if (!isChattingWithThisSender) {
                   if (isFirstFetchForThread) {
@@ -141,7 +130,14 @@ export const useChatStore = create<ChatStore>((set, get) => ({
               }
             }
 
-            updatedMessagesByChannel[threadId] = newMsgs;
+            // Update thread messages with server data while keeping new unsynced local messages if any
+            if (prevMsgsArr.length > newMsgs.length) {
+              const serverIds = new Set(newMsgs.map(m => m.id));
+              const localUnsynced = prevMsgsArr.filter(m => !serverIds.has(m.id) && m.id.startsWith('m-'));
+              updatedMessagesByChannel[threadId] = [...newMsgs, ...localUnsynced];
+            } else {
+              updatedMessagesByChannel[threadId] = newMsgs;
+            }
           });
 
           if (shouldPlaySound) {
@@ -258,7 +254,7 @@ export const useChatStore = create<ChatStore>((set, get) => ({
     try {
       if (recipientUsername) {
         // Direct Message to another real user
-        await fetch(API_BASE + '/api/chat/direct', {
+        await fetch('/api/chat/direct', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
@@ -269,9 +265,12 @@ export const useChatStore = create<ChatStore>((set, get) => ({
             replyTo
           })
         });
+        if (author.username) {
+          get().pollAllDirectMessages(author.username, true);
+        }
       } else {
         // Channel Message
-        await fetch(API_BASE + '/api/chat/messages', {
+        await fetch('/api/chat/messages', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
