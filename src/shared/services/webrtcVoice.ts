@@ -44,6 +44,7 @@ class WebRTCVoiceService {
   public userAvatar: string = '';
 
   private isMuted: boolean = false;
+  private isDeafened: boolean = false;
   private isKrispActive: boolean = true;
   private compressorNode: DynamicsCompressorNode | null = null;
   private filterNode: BiquadFilterNode | null = null;
@@ -258,6 +259,9 @@ class WebRTCVoiceService {
     const remoteAudioElement = document.createElement('audio');
     remoteAudioElement.autoplay = true;
     remoteAudioElement.setAttribute('playsinline', 'true');
+    if (this.isDeafened) {
+      remoteAudioElement.muted = true;
+    }
     document.body.appendChild(remoteAudioElement);
 
     const entry: PeerConnectionEntry = {
@@ -491,7 +495,7 @@ class WebRTCVoiceService {
     this.isMuted = muted;
     if (this.localStream) {
       this.localStream.getAudioTracks().forEach((track) => {
-        track.enabled = !muted;
+        track.enabled = !muted && !this.isDeafened;
       });
     }
     if (this.roomCode) {
@@ -499,8 +503,37 @@ class WebRTCVoiceService {
         type: 'mute-status',
         roomCode: this.roomCode,
         senderId: this.userId,
-        isMuted: muted
+        isMuted: muted || this.isDeafened
       });
+    }
+  }
+
+  public setDeafened(deafened: boolean) {
+    this.isDeafened = deafened;
+    this.peerConnections.forEach((entry) => {
+      if (entry.remoteAudioElement) {
+        entry.remoteAudioElement.muted = deafened;
+      }
+    });
+    if (this.localStream) {
+      this.localStream.getAudioTracks().forEach((track) => {
+        track.enabled = !this.isMuted && !deafened;
+      });
+    }
+    if (this.roomCode) {
+      this.sendSignal({
+        type: 'mute-status',
+        roomCode: this.roomCode,
+        senderId: this.userId,
+        isMuted: this.isMuted || deafened
+      });
+    }
+  }
+
+  public setPeerVolume(peerId: string, volume: number) {
+    const entry = this.peerConnections.get(peerId);
+    if (entry && entry.remoteAudioElement) {
+      entry.remoteAudioElement.volume = Math.max(0, Math.min(1, volume / 100));
     }
   }
 

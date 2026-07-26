@@ -34,11 +34,12 @@ class SoundService {
   }
 
   private shouldPlay(): boolean {
-    if (this.userStatus === 'dnd') return false;
-    if (this.customStatus && (
-      this.customStatus.toLowerCase().includes('не беспокоить') ||
-      this.customStatus.toLowerCase().includes('dnd')
-    )) {
+    const status = (this.userStatus || '').toLowerCase();
+    if (status === 'dnd' || status === 'busy' || status.includes('dnd') || status.includes('беспокоить')) {
+      return false;
+    }
+    const custom = (this.customStatus || '').toLowerCase();
+    if (custom.includes('не беспокоить') || custom.includes('dnd') || custom.includes('do not disturb')) {
       return false;
     }
     return true;
@@ -48,6 +49,7 @@ class SoundService {
    * Play a premium high-quality sci-fi message notification ping
    */
   public playMessage() {
+    if (!this.shouldPlay()) return;
     this.initCtx();
     if (!this.ctx) return;
 

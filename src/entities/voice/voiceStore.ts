@@ -222,6 +222,7 @@ export const useVoiceStore = create<VoiceStore>((set, get) => ({
 
   toggleDeafen: () => {
     const nextDeafened = !get().isDeafened;
+    webrtcVoice.setDeafened(nextDeafened);
     const currentUser = useUserStore.getState().currentUser;
 
     set((state) => ({
@@ -258,12 +259,14 @@ export const useVoiceStore = create<VoiceStore>((set, get) => ({
 
   setBitrate: (bitrate) => set({ bitrateKbps: bitrate }),
 
-  setParticipantVolume: (userId, volume) =>
+  setParticipantVolume: (userId, volume) => {
+    webrtcVoice.setPeerVolume(userId, volume);
     set((state) => ({
       participants: state.participants.map((p) =>
         p.user.id === userId ? { ...p, volume } : p
       )
-    })),
+    }));
+  },
 
   setDevices: (inputDevices, outputDevices) => set({ inputDevices, outputDevices }),
   setSelectedInputDeviceId: (selectedInputDeviceId) => set({ selectedInputDeviceId }),

@@ -25,6 +25,7 @@ import {
   ArrowLeft,
   Send,
   Paperclip,
+  Image as ImageIcon,
   FileCode,
   ChevronUp,
   ChevronDown,
@@ -93,6 +94,7 @@ export const FriendsView: React.FC = () => {
   const scrollContainerRef = useRef<HTMLDivElement>(null);
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const dmFileInputRef = useRef<HTMLInputElement>(null);
+  const dmImageInputRef = useRef<HTMLInputElement>(null);
   const [isNearBottomDm, setIsNearBottomDm] = useState(true);
   const [showScrollBottomBtnDm, setShowScrollBottomBtnDm] = useState(false);
   const [showChatMenu, setShowChatMenu] = useState(false);
@@ -914,10 +916,25 @@ export const FriendsView: React.FC = () => {
               accept="image/*,video/*,audio/*,application/*,text/*"
               onChange={handleDmFileChange}
             />
+            <input
+              type="file"
+              ref={dmImageInputRef}
+              className="hidden"
+              accept="image/*"
+              onChange={handleDmFileChange}
+            />
+
+            <button
+              onClick={() => dmImageInputRef.current?.click()}
+              title="Отправить фотографию"
+              className="p-2 text-[#A1A1AA] hover:text-[#22D3EE] transition-colors rounded-xl hover:bg-white/5 cursor-pointer"
+            >
+              <ImageIcon className="w-4 h-4" />
+            </button>
 
             <button
               onClick={triggerDmFileInput}
-              title="Прикрепить реальный медиафайл"
+              title="Прикрепить файл или медиа"
               className="p-2 text-[#A1A1AA] hover:text-[#22D3EE] transition-colors rounded-xl hover:bg-white/5 cursor-pointer"
             >
               <Paperclip className="w-4 h-4" />

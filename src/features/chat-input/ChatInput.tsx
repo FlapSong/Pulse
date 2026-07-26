@@ -2,11 +2,10 @@ import React, { useState, useRef } from 'react';
 import {
   Send,
   Paperclip,
+  Image as ImageIcon,
   Code2,
-  Mic,
   Smile,
   X,
-  Sparkles,
   FileCode
 } from 'lucide-react';
 import { useChatStore } from '../../entities/chat/chatStore';
@@ -21,9 +20,9 @@ export const ChatInput: React.FC<ChatInputProps> = ({ channelId, channelName }) 
   const [content, setContent] = useState('');
   const [attachments, setAttachments] = useState<any[]>([]);
   const [showEmojiPicker, setShowEmojiPicker] = useState(false);
-  const [isRecordingVoice, setIsRecordingVoice] = useState(false);
   const inputRef = useRef<HTMLInputElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const imageInputRef = useRef<HTMLInputElement>(null);
 
   const { sendMessage, replyingToMessage, setReplyingToMessage } = useChatStore();
   const { currentUser } = useUserStore();
@@ -187,11 +186,26 @@ export const ChatInput: React.FC<ChatInputProps> = ({ channelId, channelName }) 
           accept="image/*,video/*,audio/*,application/*,text/*"
           onChange={handleFileChange}
         />
+        <input
+          type="file"
+          ref={imageInputRef}
+          className="hidden"
+          accept="image/*"
+          onChange={handleFileChange}
+        />
+
+        <button
+          onClick={() => imageInputRef.current?.click()}
+          title="Отправить фотографию"
+          className="p-2.5 text-[#A1A1AA] hover:text-[#22D3EE] transition-colors ml-1 cursor-pointer"
+        >
+          <ImageIcon className="w-4 h-4" />
+        </button>
 
         <button
           onClick={triggerFileInput}
-          title="Attach real file or media"
-          className="p-2.5 text-[#A1A1AA] hover:text-[#22D3EE] transition-colors ml-1 cursor-pointer"
+          title="Прикрепить файл или медиа"
+          className="p-2.5 text-[#A1A1AA] hover:text-[#22D3EE] transition-colors cursor-pointer"
         >
           <Paperclip className="w-4 h-4" />
         </button>
