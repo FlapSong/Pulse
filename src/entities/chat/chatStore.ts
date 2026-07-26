@@ -40,12 +40,22 @@ export const useChatStore = create<ChatStore>((set, get) => ({
       const res = await fetch(`/api/chat/messages?channelId=${encodeURIComponent(channelId)}`);
       const data = await res.json();
       if (data.success && Array.isArray(data.messages) && data.messages.length > 0) {
-        set((state) => ({
-          messagesByChannel: {
-            ...state.messagesByChannel,
-            [channelId]: data.messages
-          }
-        }));
+        set((state) => {
+          const prevMsgs = state.messagesByChannel[channelId] || [];
+          const merged = data.messages.map((nm: Message) => {
+            const pm = prevMsgs.find((p) => p.id === nm.id);
+            if (pm && pm.reactions && pm.reactions.length > 0 && (!nm.reactions || nm.reactions.length === 0)) {
+              return { ...nm, reactions: pm.reactions };
+            }
+            return nm;
+          });
+          return {
+            messagesByChannel: {
+              ...state.messagesByChannel,
+              [channelId]: merged
+            }
+          };
+        });
       }
     } catch (e) {
       console.warn('Failed to fetch channel messages:', e);
@@ -69,10 +79,17 @@ export const useChatStore = create<ChatStore>((set, get) => ({
               soundService.playMessage();
             }
           }
+          const merged = data.messages.map((nm: Message) => {
+            const pm = prev.find((p) => p.id === nm.id);
+            if (pm && pm.reactions && pm.reactions.length > 0 && (!nm.reactions || nm.reactions.length === 0)) {
+              return { ...nm, reactions: pm.reactions };
+            }
+            return nm;
+          });
           return {
             messagesByChannel: {
               ...state.messagesByChannel,
-              [threadId]: data.messages
+              [threadId]: merged
             }
           };
         });
@@ -130,13 +147,21 @@ export const useChatStore = create<ChatStore>((set, get) => ({
               }
             }
 
-            // Update thread messages with server data while keeping new unsynced local messages if any
-            if (prevMsgsArr.length > newMsgs.length) {
-              const serverIds = new Set(newMsgs.map(m => m.id));
-              const localUnsynced = prevMsgsArr.filter(m => !serverIds.has(m.id) && m.id.startsWith('m-'));
-              updatedMessagesByChannel[threadId] = [...newMsgs, ...localUnsynced];
+            // Update thread messages with server data while keeping local reactions and unsynced messages if any
+            const mergedNewMsgs = newMsgs.map((nm) => {
+              const prevMsg = prevMsgsArr.find((pm) => pm.id === nm.id);
+              if (prevMsg && prevMsg.reactions && prevMsg.reactions.length > 0 && (!nm.reactions || nm.reactions.length === 0)) {
+                return { ...nm, reactions: prevMsg.reactions };
+              }
+              return nm;
+            });
+
+            if (prevMsgsArr.length > mergedNewMsgs.length) {
+              const serverIds = new Set(mergedNewMsgs.map(m => m.id));
+              const localUnsynced = prevMsgsArr.filter(m => !serverIds.has(m.id) && (m.id.startsWith('m-') || m.id.startsWith('dm-')));
+              updatedMessagesByChannel[threadId] = [...mergedNewMsgs, ...localUnsynced];
             } else {
-              updatedMessagesByChannel[threadId] = newMsgs;
+              updatedMessagesByChannel[threadId] = mergedNewMsgs;
             }
           });
 

@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { UserStatus } from '../types';
 
 interface AvatarProps {
@@ -19,6 +19,10 @@ export const Avatar: React.FC<AvatarProps> = ({
   className = ''
 }) => {
   const [imgError, setImgError] = useState(false);
+
+  useEffect(() => {
+    setImgError(false);
+  }, [src]);
 
   const sizeMap = {
     sm: 'w-7 h-7 text-xs',

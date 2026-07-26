@@ -23,7 +23,8 @@ const app = express();
 const PORT = Number(process.env.PORT) || 3000;
 
 app.use(cors());
-app.use(express.json());
+app.use(express.json({ limit: '50mb' }));
+app.use(express.urlencoded({ extended: true, limit: '50mb' }));
 
 let usersInitialized = false;
 app.use(async (req, res, next) => {
@@ -1284,27 +1285,34 @@ app.get('/api/chat/messages', async (req, res) => {
   }
 
   try {
+    const allUsers = await getUsers();
     const rows = await querySql(
       'SELECT * FROM messages WHERE channel_id = ? ORDER BY timestamp ASC',
       [channelId]
     );
 
-    const messages = rows.map((r: any) => ({
-      id: r.id,
-      channelId: r.channel_id,
-      author: {
-        id: r.sender_id,
-        username: r.sender_name,
-        displayName: r.sender_name,
-        avatar: r.sender_avatar
-      },
-      content: r.content,
-      timestamp: new Date(r.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
-      attachments: r.attachments ? JSON.parse(r.attachments) : [],
-      reactions: r.reactions ? JSON.parse(r.reactions) : [],
-      isPinned: Boolean(r.pinned),
-      replyTo: r.reply_to ? JSON.parse(r.reply_to) : undefined
-    }));
+    const messages = rows.map((r: any) => {
+      const senderUser = allUsers.find(
+        (u) => u.id === r.sender_id || u.login.toLowerCase() === (r.sender_name || '').toLowerCase()
+      );
+
+      return {
+        id: r.id,
+        channelId: r.channel_id,
+        author: {
+          id: senderUser ? senderUser.id : r.sender_id,
+          username: senderUser ? senderUser.login : r.sender_name,
+          displayName: senderUser ? senderUser.displayName : r.sender_name,
+          avatar: senderUser && senderUser.avatar ? senderUser.avatar : (r.sender_avatar || 'https://images.unsplash.com/photo-1535713875002-d1d0cf377fde?w=150&auto=format&fit=crop&q=80')
+        },
+        content: r.content || '',
+        timestamp: new Date(r.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
+        attachments: r.attachments ? JSON.parse(r.attachments) : [],
+        reactions: r.reactions ? JSON.parse(r.reactions) : [],
+        isPinned: Boolean(r.pinned),
+        replyTo: r.reply_to ? JSON.parse(r.reply_to) : undefined
+      };
+    });
 
     res.json({ success: true, messages });
   } catch (err: any) {
@@ -1315,7 +1323,7 @@ app.get('/api/chat/messages', async (req, res) => {
 // Post channel message
 app.post('/api/chat/messages', async (req, res) => {
   const { channelId, author, content, attachments, replyTo } = req.body;
-  if (!channelId || !author || !content) {
+  if (!channelId || !author || (!content && (!attachments || attachments.length === 0))) {
     return res.status(400).json({ success: false, error: 'Missing message fields' });
   }
 
@@ -1613,14 +1621,34 @@ app.post('/api/chat/reaction', async (req, res) => {
     return res.status(400).json({ success: false, error: 'Missing required parameters' });
   }
 
-  const isDm = channelId.startsWith('dm-');
+  const isDm = channelId.startsWith('dm-') || messageId.startsWith('dm-');
   const tableName = isDm ? 'direct_messages' : 'messages';
 
   try {
     // Find the message
-    const rows = await querySql(`SELECT reactions FROM ${tableName} WHERE id = ?`, [messageId]);
+    let rows = await querySql(`SELECT reactions FROM ${tableName} WHERE id = ?`, [messageId]);
+
+    // If message is not yet in DB (e.g., initial or memory-based message), attempt to create a placeholder or check opposite table
     if (rows.length === 0) {
-      return res.status(404).json({ success: false, error: 'Message not found' });
+      const otherTable = isDm ? 'messages' : 'direct_messages';
+      rows = await querySql(`SELECT reactions FROM ${otherTable} WHERE id = ?`, [messageId]);
+      if (rows.length === 0) {
+        // Upsert message placeholder if missing from DB so reaction persists
+        const timestamp = Date.now();
+        const initialReactions = JSON.stringify([{ emoji, count: 1, users: [userId] }]);
+        if (isDm) {
+          await execSql(
+            `INSERT OR IGNORE INTO direct_messages (id, thread_id, sender_id, recipient_id, content, timestamp, reactions) VALUES (?, ?, ?, ?, ?, ?, ?)`,
+            [messageId, channelId, userId, 'system', '', timestamp, initialReactions]
+          );
+        } else {
+          await execSql(
+            `INSERT OR IGNORE INTO messages (id, channel_id, sender_id, sender_name, content, timestamp, reactions) VALUES (?, ?, ?, ?, ?, ?, ?)`,
+            [messageId, channelId, userId, userId, '', timestamp, initialReactions]
+          );
+        }
+        return res.json({ success: true, reactions: [{ emoji, count: 1, users: [userId] }] });
+      }
     }
 
     let reactions: any[] = [];
@@ -1763,6 +1791,25 @@ app.get('/api/calls/incoming', async (req, res) => {
     }));
 
     res.json({ success: true, incomingCalls: calls });
+  } catch (err: any) {
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+// Dismiss / Accept / Decline call signal
+app.post('/api/calls/dismiss', async (req, res) => {
+  const { signalId, targetId, roomId } = req.body;
+  try {
+    if (signalId) {
+      await execSql('DELETE FROM call_signals WHERE id = ?', [signalId]);
+    }
+    if (targetId) {
+      await execSql('DELETE FROM call_signals WHERE LOWER(target_id) = ? AND type = \'ring\'', [targetId.toLowerCase().trim()]);
+    }
+    if (roomId) {
+      await execSql('DELETE FROM call_signals WHERE LOWER(room_id) = ? AND type = \'ring\'', [roomId.toLowerCase().trim()]);
+    }
+    res.json({ success: true });
   } catch (err: any) {
     res.status(500).json({ success: false, error: err.message });
   }

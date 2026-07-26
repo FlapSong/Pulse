@@ -225,29 +225,6 @@ export const FriendsView: React.FC = () => {
     return () => clearInterval(interval);
   }, [activeChatUser, currentUser.username, fetchDirectMessages, markAsRead]);
 
-  // Incoming WebRTC Call detector
-  useEffect(() => {
-    if (!currentUser.username) return;
-    const interval = setInterval(async () => {
-      try {
-        const res = await fetch(`/api/calls/incoming?userId=${encodeURIComponent(currentUser.username)}`);
-        const data = await res.json();
-        if (data.success && Array.isArray(data.incomingCalls) && data.incomingCalls.length > 0) {
-          const call = data.incomingCalls[0];
-          if (activeVoiceChannelId !== call.roomId) {
-            setIncomingCall({
-              roomId: call.roomId,
-              callerId: call.callerId,
-              callerName: call.payload?.callerName || call.callerId
-            });
-          }
-        }
-      } catch (e) {}
-    }, 1500);
-
-    return () => clearInterval(interval);
-  }, [currentUser.username, activeVoiceChannelId]);
-
   // Handle URL room connect
   useEffect(() => {
     const params = new URLSearchParams(window.location.search);

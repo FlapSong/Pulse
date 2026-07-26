@@ -46,7 +46,8 @@ function initTables(db: Database) {
       timestamp INTEGER,
       attachments TEXT,
       read_status INTEGER DEFAULT 0,
-      reply_to TEXT
+      reply_to TEXT,
+      reactions TEXT
     );
 
     CREATE TABLE IF NOT EXISTS friends (

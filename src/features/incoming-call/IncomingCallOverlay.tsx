@@ -1,10 +1,11 @@
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useState, useRef } from 'react';
 import { Phone, PhoneOff, PhoneCall } from 'lucide-react';
 import { useUserStore } from '../../entities/user/userStore';
 import { useVoiceStore } from '../../entities/voice/voiceStore';
 import { soundService } from '../../shared/services/soundService';
 
 interface IncomingCallData {
+  signalId?: string;
   roomId: string;
   callerId: string;
   callerName: string;
@@ -15,9 +16,17 @@ export const IncomingCallOverlay: React.FC = () => {
   const { currentUser } = useUserStore();
   const { connectToVoice, activeVoiceChannelId } = useVoiceStore();
   const [incomingCall, setIncomingCall] = useState<IncomingCallData | null>(null);
+  const handledSignalIdsRef = useRef<Set<string>>(new Set());
+
+  const isDnd = currentUser?.status === 'dnd' || (
+    currentUser?.customStatus && (
+      currentUser.customStatus.toLowerCase().includes('не беспокоить') ||
+      currentUser.customStatus.toLowerCase().includes('dnd')
+    )
+  );
 
   useEffect(() => {
-    if (!currentUser || !currentUser.username) return;
+    if (!currentUser || !currentUser.username || isDnd) return;
 
     const checkCalls = async () => {
       try {
@@ -25,19 +34,35 @@ export const IncomingCallOverlay: React.FC = () => {
         const data = await res.json();
         if (data.success && Array.isArray(data.incomingCalls) && data.incomingCalls.length > 0) {
           const call = data.incomingCalls[0];
-          if (activeVoiceChannelId !== call.roomId) {
-            setIncomingCall((prev) => {
-              if (!prev || prev.roomId !== call.roomId) {
-                soundService.startIncomingCallRing();
-              }
-              return {
-                roomId: call.roomId,
-                callerId: call.callerId,
-                callerName: call.payload?.callerName || call.callerId,
-                avatar: call.payload?.avatar
-              };
-            });
+          
+          if (handledSignalIdsRef.current.has(call.id)) {
+            return;
           }
+
+          if (activeVoiceChannelId === call.roomId) {
+            handledSignalIdsRef.current.add(call.id);
+            soundService.stopCallRing();
+            setIncomingCall(null);
+            fetch('/api/calls/dismiss', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ signalId: call.id, targetId: currentUser.username, roomId: call.roomId })
+            }).catch(() => {});
+            return;
+          }
+
+          setIncomingCall((prev) => {
+            if (!prev || prev.roomId !== call.roomId) {
+              soundService.startIncomingCallRing();
+            }
+            return {
+              signalId: call.id,
+              roomId: call.roomId,
+              callerId: call.callerId,
+              callerName: call.payload?.callerName || call.callerId,
+              avatar: call.payload?.avatar
+            };
+          });
         } else {
           setIncomingCall((prev) => {
             if (prev) {
@@ -58,14 +83,7 @@ export const IncomingCallOverlay: React.FC = () => {
       clearInterval(interval);
       soundService.stopCallRing();
     };
-  }, [currentUser, activeVoiceChannelId]);
-
-  const isDnd = currentUser?.status === 'dnd' || (
-    currentUser?.customStatus && (
-      currentUser.customStatus.toLowerCase().includes('не беспокоить') ||
-      currentUser.customStatus.toLowerCase().includes('dnd')
-    )
-  );
+  }, [currentUser, activeVoiceChannelId, isDnd]);
 
   useEffect(() => {
     if (isDnd) {
@@ -76,15 +94,32 @@ export const IncomingCallOverlay: React.FC = () => {
 
   if (!incomingCall || isDnd) return null;
 
-  const handleAccept = () => {
+  const dismissCurrentCall = (signalId?: string, roomId?: string) => {
     soundService.stopCallRing();
-    connectToVoice(incomingCall.roomId, `Звонок: @${incomingCall.callerName}`);
+    if (signalId) {
+      handledSignalIdsRef.current.add(signalId);
+    }
     setIncomingCall(null);
+
+    fetch('/api/calls/dismiss', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        signalId,
+        targetId: currentUser?.username,
+        roomId
+      })
+    }).catch(() => {});
+  };
+
+  const handleAccept = () => {
+    const callData = incomingCall;
+    dismissCurrentCall(callData.signalId, callData.roomId);
+    connectToVoice(callData.roomId, `Звонок: @${callData.callerName}`);
   };
 
   const handleDecline = () => {
-    soundService.stopCallRing();
-    setIncomingCall(null);
+    dismissCurrentCall(incomingCall.signalId, incomingCall.roomId);
   };
 
   return (
