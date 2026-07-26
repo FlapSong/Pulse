@@ -467,7 +467,7 @@ class WebRTCVoiceService {
       } catch (e) {}
     }
     if (this.roomCode) {
-      fetch(API_BASE + '/api/calls/signal', {
+      fetch('/api/calls/signal', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({

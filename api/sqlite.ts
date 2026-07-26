@@ -100,22 +100,42 @@ export async function getSqliteDb(): Promise<Database> {
     fs.mkdirSync(dataDir, { recursive: true });
   }
 
+  let loaded = false;
+
   if (fs.existsSync(dbFilePath)) {
     try {
       const fileBuffer = fs.readFileSync(dbFilePath);
-      dbInstance = new SQL.Database(fileBuffer);
-    } catch (err) {
-      console.warn('⚠️ Could not load existing pulse.sqlite, creating fresh database:', err);
-      dbInstance = new SQL.Database();
+      const testDb = new SQL.Database(fileBuffer);
+      // Validate that database is not malformed
+      testDb.exec('PRAGMA quick_check;');
+      dbInstance = testDb;
+      loaded = true;
+    } catch (err: any) {
+      console.warn('⚠️ Corrupted/malformed pulse.sqlite detected. Recreating fresh database:', err?.message || err);
+      try {
+        if (fs.existsSync(dbFilePath)) {
+          fs.unlinkSync(dbFilePath);
+        }
+      } catch (e) {}
     }
-  } else {
+  }
+
+  if (!loaded) {
     dbInstance = new SQL.Database();
   }
 
-  initTables(dbInstance);
-  saveSqliteDb();
-  console.log('✅ SQLite Database (sql.js) initialized at data/pulse.sqlite');
-  return dbInstance;
+  try {
+    initTables(dbInstance!);
+    saveSqliteDb();
+    console.log('✅ SQLite Database (sql.js) initialized successfully at data/pulse.sqlite');
+  } catch (err: any) {
+    console.error('❌ Failed to initialize tables on loaded database. Resetting database:', err?.message || err);
+    dbInstance = new SQL.Database();
+    initTables(dbInstance);
+    saveSqliteDb();
+  }
+
+  return dbInstance!;
 }
 
 export function saveSqliteDb() {
@@ -127,7 +147,9 @@ export function saveSqliteDb() {
     if (!fs.existsSync(dataDir)) {
       fs.mkdirSync(dataDir, { recursive: true });
     }
-    fs.writeFileSync(dbFilePath, buffer);
+    const tmpPath = `${dbFilePath}.tmp`;
+    fs.writeFileSync(tmpPath, buffer);
+    fs.renameSync(tmpPath, dbFilePath);
   } catch (err) {
     console.error('❌ Failed to save SQLite db to disk:', err);
   }
@@ -135,19 +157,54 @@ export function saveSqliteDb() {
 
 // Helper queries for SQLite
 export async function querySql<T = any>(sql: string, params: any[] = []): Promise<T[]> {
-  const db = await getSqliteDb();
-  const stmt = db.prepare(sql);
-  stmt.bind(params);
-  const results: T[] = [];
-  while (stmt.step()) {
-    results.push(stmt.getAsObject() as T);
+  try {
+    const db = await getSqliteDb();
+    const stmt = db.prepare(sql);
+    stmt.bind(params);
+    const results: T[] = [];
+    while (stmt.step()) {
+      results.push(stmt.getAsObject() as T);
+    }
+    stmt.free();
+    return results;
+  } catch (err: any) {
+    if (err?.message?.includes('malformed') || err?.toString()?.includes('malformed')) {
+      console.error('⚠️ Database malformed during query. Resetting dbInstance:', err);
+      dbInstance = null;
+      try {
+        if (fs.existsSync(dbFilePath)) fs.unlinkSync(dbFilePath);
+      } catch (e) {}
+      const db = await getSqliteDb();
+      const stmt = db.prepare(sql);
+      stmt.bind(params);
+      const results: T[] = [];
+      while (stmt.step()) {
+        results.push(stmt.getAsObject() as T);
+      }
+      stmt.free();
+      return results;
+    }
+    throw err;
   }
-  stmt.free();
-  return results;
 }
 
 export async function execSql(sql: string, params: any[] = []): Promise<void> {
-  const db = await getSqliteDb();
-  db.run(sql, params);
-  saveSqliteDb();
+  try {
+    const db = await getSqliteDb();
+    db.run(sql, params);
+    saveSqliteDb();
+  } catch (err: any) {
+    if (err?.message?.includes('malformed') || err?.toString()?.includes('malformed')) {
+      console.error('⚠️ Database malformed during exec. Resetting dbInstance:', err);
+      dbInstance = null;
+      try {
+        if (fs.existsSync(dbFilePath)) fs.unlinkSync(dbFilePath);
+      } catch (e) {}
+      const db = await getSqliteDb();
+      db.run(sql, params);
+      saveSqliteDb();
+      return;
+    }
+    throw err;
+  }
 }

@@ -6,8 +6,6 @@ import nodemailer from 'nodemailer';
 import dotenv from 'dotenv';
 import { exec } from 'child_process';
 import os from 'os';
-import { initializeApp, applicationDefault, cert, getApps } from 'firebase-admin/app';
-import { getFirestore } from 'firebase-admin/firestore';
 import { getSqliteDb, querySql, execSql, saveSqliteDb } from './sqlite.ts';
 
 // Explicitly load .env from current working directory
@@ -21,127 +19,20 @@ process.on('uncaughtException', (err) => {
   console.error('❌ Uncaught Exception caught:', err.message);
 });
 
-// Initialize Firebase Admin lazily
-let db: any;
-let firebaseInitialized = false;
-
-async function initFirebase() {
-  if (firebaseInitialized) return;
-  firebaseInitialized = true;
-  
-  try {
-    const configPath = path.join(process.cwd(), 'firebase-applet-config.json');
-    let config: any = {};
-    if (fs.existsSync(configPath)) {
-      try {
-        config = JSON.parse(fs.readFileSync(configPath, 'utf-8'));
-      } catch (e) {
-        console.warn('⚠️ Could not parse firebase-applet-config.json');
-      }
-    }
-
-    const projectId = process.env.FIREBASE_PROJECT_ID || config.projectId;
-    const databaseId = process.env.FIRESTORE_DATABASE_ID || config.firestoreDatabaseId;
-
-    if (!projectId) {
-      console.log('ℹ️ No Firebase Project ID found. Using local JSON storage mode.');
-      db = null;
-      return;
-    }
-
-    // Check for credentials in environment before calling initializeApp
-    let credential: any = null;
-    let credSource = '';
-
-    if (process.env.FIREBASE_SERVICE_ACCOUNT) {
-      try {
-        const raw = process.env.FIREBASE_SERVICE_ACCOUNT.trim();
-        const parsed = JSON.parse(raw.startsWith('{') ? raw : Buffer.from(raw, 'base64').toString('utf-8'));
-        credential = cert(parsed);
-        credSource = 'FIREBASE_SERVICE_ACCOUNT';
-      } catch (err: any) {
-        console.warn('⚠️ Could not parse FIREBASE_SERVICE_ACCOUNT env var:', err.message);
-      }
-    }
-
-    if (!credential && process.env.FIREBASE_CLIENT_EMAIL && process.env.FIREBASE_PRIVATE_KEY) {
-      try {
-        const privateKey = process.env.FIREBASE_PRIVATE_KEY.replace(/\\n/g, '\n');
-        credential = cert({
-          projectId: projectId,
-          clientEmail: process.env.FIREBASE_CLIENT_EMAIL,
-          privateKey: privateKey
-        });
-        credSource = 'FIREBASE_PRIVATE_KEY';
-      } catch (err: any) {
-        console.warn('⚠️ Could not construct credential from FIREBASE_PRIVATE_KEY:', err.message);
-      }
-    }
-
-    if (!credential && process.env.GOOGLE_APPLICATION_CREDENTIALS) {
-      const credPath = process.env.GOOGLE_APPLICATION_CREDENTIALS.trim();
-      if (fs.existsSync(credPath)) {
-        credential = applicationDefault();
-        credSource = 'GOOGLE_APPLICATION_CREDENTIALS_FILE';
-      } else {
-        try {
-          const parsed = JSON.parse(credPath);
-          credential = cert(parsed);
-          credSource = 'GOOGLE_APPLICATION_CREDENTIALS_JSON';
-        } catch {
-          console.warn('⚠️ GOOGLE_APPLICATION_CREDENTIALS path not found and not valid JSON.');
-        }
-      }
-    }
-
-    // Check if running in a Google Cloud environment (Cloud Run / App Engine)
-    if (!credential && (process.env.K_SERVICE || process.env.GAE_SERVICE || process.env.GOOGLE_CLOUD_PROJECT)) {
-      credential = applicationDefault();
-      credSource = 'GCP_CLOUD_RUN_ADC';
-    }
-
-    if (!credential) {
-      console.log('ℹ️ Firebase Project ID configured, but no Google/Firebase credentials found in environment.');
-      console.log('ℹ️ Server running in local JSON storage mode.');
-      console.log('💡 (Optional) To enable Firestore on Railway/Vercel, set FIREBASE_SERVICE_ACCOUNT env var.');
-      db = null;
-      return;
-    }
-
-    try {
-      console.log(`📡 Initializing Firebase Admin (${credSource}) for project: ${projectId}`);
-      const apps = getApps();
-      const app = apps.length > 0 ? apps[0] : initializeApp({ credential, projectId });
-      const firestore = databaseId ? getFirestore(databaseId) : getFirestore(app);
-
-      // Verify connection with document get
-      await firestore.collection('_internal').doc('health').get();
-      db = firestore;
-      console.log(`✅ Firebase Admin connected (Project: ${projectId}, DB: ${databaseId || '(default)'})`);
-    } catch (authErr: any) {
-      console.warn('⚠️ Firestore connection verification failed. Falling back to local storage:', authErr.message || authErr);
-      db = null;
-    }
-  } catch (err: any) {
-    console.error('❌ Unexpected error during Firebase setup:', err.message || err);
-    db = null;
-  }
-}
-
 const app = express();
 const PORT = Number(process.env.PORT) || 3000;
 
 app.use(cors());
 app.use(express.json());
 
-// Ensure Firebase & default users are initialized on cold-start requests
+let usersInitialized = false;
 app.use(async (req, res, next) => {
-  if (db === undefined) {
+  if (!usersInitialized) {
+    usersInitialized = true;
     try {
-      await initFirebase();
       await ensureDefaultUsers();
     } catch (err: any) {
-      console.error('Firebase auto-init error:', err?.message || err);
+      console.error('Auto-init error:', err?.message || err);
     }
   }
   next();
@@ -150,35 +41,19 @@ app.use(async (req, res, next) => {
 // API Health Check
 app.get('/api/health', async (req, res) => {
   try {
-    await initFirebase();
-    
-    let userCount = 0;
-    let firestoreStatus = db ? 'active' : 'inactive';
-    
-    if (db) {
-      try {
-        const snapshot = await db.collection('users').count().get();
-        userCount = snapshot.data().count;
-      } catch (e: any) {
-        firestoreStatus = `error: ${e.message}`;
-      }
-    }
-
+    const userCount = (await getUsers()).length;
     res.json({
       status: 'ok',
       timestamp: Date.now(),
-      database: db ? 'firestore' : 'json',
-      firestore: {
-        status: firestoreStatus,
-        userCount
-      },
+      database: 'sqlite',
+      userCount,
       environment: process.env.NODE_ENV || 'development'
     });
   } catch (err: any) {
     res.json({
       status: 'ok',
       timestamp: Date.now(),
-      database: 'json',
+      database: 'sqlite',
       health: 'degraded',
       error: err?.message || 'Health check error'
     });
@@ -283,13 +158,34 @@ async function ensureUserExists(login: string, displayName?: string, avatar?: st
 
 // Firebase Helpers with Fallback to Local JSON
 async function getUsers(): Promise<StoredUser[]> {
-  if (db) {
-    try {
-      const snapshot = await db.collection('users').get();
-      return snapshot.docs.map((doc: any) => doc.data() as StoredUser);
-    } catch (err) {
-      console.warn('Firestore getUsers failed, falling back to JSON:', err);
+  try {
+    const rows = await querySql('SELECT * FROM users');
+    if (rows && rows.length > 0) {
+      const localUsers = getLocalUsers();
+      return rows.map((r: any) => {
+        const localMatch = localUsers.find(u => u.id === r.id || u.login.toLowerCase() === (r.login || '').toLowerCase());
+        return {
+          id: r.id,
+          login: r.login,
+          displayName: r.display_name || r.login,
+          password: r.password || '123',
+          email: r.email || `${r.login}@pulse.gg`,
+          avatar: r.avatar || 'https://images.unsplash.com/photo-1534528741775-53994a69daeb?w=150&auto=format&fit=crop&q=80',
+          role: r.role || 'Pulse Member',
+          badge: r.badge || 'MEMBER',
+          isVerified: Boolean(r.is_verified),
+          status: r.status || 'online',
+          customStatus: r.custom_status || '⚡ В сети в Pulse',
+          createdAt: r.created_at || Date.now(),
+          friends: localMatch?.friends || [],
+          friendRequestsIncoming: localMatch?.friendRequestsIncoming || [],
+          friendRequestsOutgoing: localMatch?.friendRequestsOutgoing || [],
+          blockedLogins: localMatch?.blockedLogins || []
+        };
+      });
     }
+  } catch (err) {
+    console.warn('SQLite getUsers error:', err);
   }
   return getLocalUsers();
 }
@@ -310,25 +206,8 @@ function getLocalUsers(): StoredUser[] {
 async function getUserByLogin(login: string): Promise<StoredUser | null> {
   if (!login) return null;
   const normLogin = login.trim().toLowerCase().replace(/^@+/, '');
-  if (db) {
-    try {
-      const doc = await db.collection('users').doc(normLogin).get();
-      if (doc.exists) return doc.data() as StoredUser;
-      
-      // If not found in Firestore, check if we have it locally (maybe not migrated yet)
-      const localUsers = getLocalUsers();
-      const localMatch = localUsers.find(u => u.login.toLowerCase().replace(/^@+/, '') === normLogin);
-      if (localMatch) {
-        console.log(`ℹ️ User ${normLogin} found in local JSON but not Firestore. Triggering background migration.`);
-        saveUser(localMatch).catch(err => console.error('Background migration failed:', err));
-        return localMatch;
-      }
-    } catch (err: any) {
-      console.warn('Firestore getUserByLogin failed, falling back to JSON:', err.message);
-    }
-  }
-  const users = getLocalUsers();
-  return users.find(u => u.login.toLowerCase().replace(/^@+/, '') === normLogin) || null;
+  const allUsers = await getUsers();
+  return allUsers.find(u => u.login.toLowerCase().replace(/^@+/, '') === normLogin) || null;
 }
 
 async function findUserFlexible(query: string): Promise<StoredUser | null> {
@@ -351,21 +230,51 @@ async function findUserFlexible(query: string): Promise<StoredUser | null> {
 }
 
 async function getUserById(id: string): Promise<StoredUser | null> {
-  if (db) {
-    try {
-      const snapshot = await db.collection('users').where('id', '==', id).limit(1).get();
-      if (!snapshot.empty) return snapshot.docs[0].data() as StoredUser;
-    } catch (err) {
-      console.warn('Firestore getUserById failed, falling back to JSON:', err);
-    }
-  }
-  const users = getLocalUsers();
-  return users.find(u => u.id === id) || null;
+  if (!id) return null;
+  const allUsers = await getUsers();
+  return allUsers.find(u => u.id === id) || null;
 }
 
 async function saveUser(user: StoredUser) {
   const normLogin = user.login.toLowerCase().trim();
-  // Always save to JSON as a backup
+
+  try {
+    await execSql(
+      `INSERT INTO users (id, login, display_name, email, password, avatar, role, badge, bio, status, custom_status, is_verified, created_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+       ON CONFLICT(id) DO UPDATE SET
+         login = excluded.login,
+         display_name = excluded.display_name,
+         email = excluded.email,
+         password = excluded.password,
+         avatar = excluded.avatar,
+         role = excluded.role,
+         badge = excluded.badge,
+         bio = excluded.bio,
+         status = excluded.status,
+         custom_status = excluded.custom_status,
+         is_verified = excluded.is_verified`,
+      [
+        user.id,
+        normLogin,
+        user.displayName || normLogin,
+        user.email || '',
+        user.password || '123',
+        user.avatar || '',
+        user.role || 'Pulse Member',
+        user.badge || 'MEMBER',
+        '',
+        user.status || 'online',
+        user.customStatus || '⚡ В сети в Pulse',
+        user.isVerified ? 1 : 0,
+        user.createdAt || Date.now()
+      ]
+    );
+  } catch (e) {
+    console.warn('SQLite saveUser warning:', e);
+  }
+
+  // Backup to JSON file
   const users = getLocalUsers();
   const index = users.findIndex(u => u.login.toLowerCase() === normLogin);
   if (index !== -1) {
@@ -378,42 +287,14 @@ async function saveUser(user: StoredUser) {
   } catch (e) {
     console.error('Failed to save local users backup:', e);
   }
-
-  // Try to save to Firestore if available
-  if (db) {
-    try {
-      await db.collection('users').doc(normLogin).set(user, { merge: true });
-    } catch (err) {
-      console.warn('Firestore saveUser failed:', err);
-    }
-  }
 }
 
 async function getEmails(): Promise<StoredEmail[]> {
-  if (db) {
-    try {
-      const snapshot = await db.collection('emails').get();
-      return snapshot.docs.map((doc: any) => doc.data() as StoredEmail);
-    } catch (err) {
-      console.warn('Firestore getEmails failed, falling back to JSON:', err);
-    }
-  }
   return getLocalEmails();
 }
 
 async function getEmailsByTo(to: string): Promise<StoredEmail[]> {
   const normTo = to.toLowerCase().trim();
-  if (db) {
-    try {
-      const snapshot = await db.collection('emails')
-        .where('to', '==', normTo)
-        .orderBy('createdAt', 'desc')
-        .get();
-      return snapshot.docs.map((doc: any) => doc.data() as StoredEmail);
-    } catch (err) {
-      console.warn('Firestore getEmailsByTo failed, falling back to JSON:', err);
-    }
-  }
   return getLocalEmails().filter(e => e.to.toLowerCase().trim() === normTo);
 }
 
@@ -428,7 +309,6 @@ function getLocalEmails(): StoredEmail[] {
 }
 
 async function saveEmail(email: StoredEmail) {
-  // Backup to JSON
   const emails = getLocalEmails();
   emails.unshift(email);
   try {
@@ -436,43 +316,23 @@ async function saveEmail(email: StoredEmail) {
   } catch (e) {
     console.error('Failed to save local emails backup:', e);
   }
-
-  // Save to Firestore
-  if (db) {
-    try {
-      await db.collection('emails').doc(email.id).set(email);
-    } catch (err) {
-      console.warn('Firestore saveEmail failed:', err);
-    }
-  }
 }
 
 async function ensureDefaultUsers() {
-  await initFirebase();
-  console.log('🔄 Starting user initialization/migration...');
+  console.log('🔄 Initializing SQLite database and users...');
   try {
-    // Check if we have local data to migrate
     if (fs.existsSync(USERS_FILE)) {
       try {
         const data = fs.readFileSync(USERS_FILE, 'utf-8');
         const localUsers: StoredUser[] = JSON.parse(data);
         if (Array.isArray(localUsers)) {
-          console.log(`📂 Found ${localUsers.length} local users in ${USERS_FILE}`);
           for (const user of localUsers) {
-            const existing = await getUserByLogin(user.login);
-            if (!existing) {
-              await saveUser(user);
-              if (db) console.log(`🚀 Migrated local user to Firestore: ${user.login}`);
-            } else {
-              console.log(`✅ User ${user.login} already exists in ${db ? 'Firestore' : 'JSON'}`);
-            }
+            await saveUser(user);
           }
         }
       } catch (e: any) {
         console.error('❌ Migration failed:', e.message);
       }
-    } else {
-      console.log(`ℹ️ No local users file found at ${USERS_FILE}`);
     }
 
     for (const user of DEFAULT_USERS) {
@@ -483,28 +343,13 @@ async function ensureDefaultUsers() {
       }
     }
 
-    // Clear any test direct messages on startup so no unsolicited test message appears on load
     try {
-      // More aggressive deletion pattern
       await execSql("DELETE FROM direct_messages WHERE content LIKE '%тестовое%' OR content LIKE '%симулированное%' OR content LIKE '%Привет!%'");
-      if (db) {
-        const snapshot = await db.collection('direct_messages').get();
-        for (const doc of snapshot.docs) {
-          const data = doc.data();
-          if (data.content && (
-            data.content.includes('тестовое') || 
-            data.content.includes('симулированное') || 
-            data.content.includes('Привет!')
-          )) {
-            await doc.ref.delete();
-          }
-        }
-      }
     } catch (e) {
       console.warn('Failed to clear test direct messages on startup:', e);
     }
 
-    console.log('✅ User initialization complete.');
+    console.log('✅ SQLite User initialization complete.');
   } catch (err: any) {
     console.warn('⚠️ Failed to ensure default users:', err.message);
   }
@@ -1754,35 +1599,6 @@ app.post('/api/chat/direct/clear', async (req, res) => {
     const result = await execSql(sql, params);
     console.log('SQLite delete result:', result);
 
-    // Also delete from Firestore if connected (safe non-blocking try/catch)
-    if (db) {
-      try {
-        console.log('Firestore connected, deleting direct_messages docs...');
-        const snapshot = await db.collection('direct_messages').get();
-        let deletedFsCount = 0;
-        for (const doc of snapshot.docs) {
-          const data = doc.data();
-          const s = (data.sender_id || '').toLowerCase();
-          const r = (data.recipient_id || '').toLowerCase();
-          const t = (data.thread_id || '').toLowerCase();
-
-          const isU1Sender = u1Keys.includes(s);
-          const isU2Sender = u2Keys.includes(s);
-          const isU1Recip = u1Keys.includes(r);
-          const isU2Recip = u2Keys.includes(r);
-          const matchesThread = t.includes(c1Str) && t.includes(c2Str);
-
-          if ((isU1Sender && isU2Recip) || (isU2Sender && isU1Recip) || matchesThread) {
-            await doc.ref.delete();
-            deletedFsCount++;
-          }
-        }
-        console.log(`Deleted ${deletedFsCount} docs from Firestore`);
-      } catch (fsErr: any) {
-        console.warn('Firestore deletion non-fatal warning:', fsErr?.message || fsErr);
-      }
-    }
-
     res.json({ success: true, message: 'История чата успешно очищена' });
   } catch (err: any) {
     console.error('Failed to clear chat:', err);
@@ -2078,10 +1894,7 @@ app.get('/api/system/process', (req, res) => {
 // ==================== VITE SERVER INTEGRATION ====================
 
 async function startServer() {
-  // Initialize Firebase
-  await initFirebase();
-
-  // Ensure default users exist (handles both Firestore and Local fallback)
+  // Ensure default users exist in SQLite
   try {
     await ensureDefaultUsers();
   } catch (err: any) {
