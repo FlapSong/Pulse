@@ -58,6 +58,10 @@ export const ChatInput: React.FC<ChatInputProps> = ({ channelId, channelName }) 
       if (item.type.indexOf('image') !== -1) {
         const file = item.getAsFile();
         if (file) {
+          if (file.size > 100 * 1024 * 1024) {
+            alert('Изображение слишком большое! Максимальный размер — 100 МБ.');
+            return;
+          }
           const reader = new FileReader();
           reader.onload = (event) => {
             if (event.target?.result) {
@@ -96,6 +100,12 @@ export const ChatInput: React.FC<ChatInputProps> = ({ channelId, channelName }) 
     const file = e.target.files?.[0];
     if (!file) return;
 
+    if (file.size > 100 * 1024 * 1024) {
+      alert('Файл слишком большой! Максимальный размер фото или файла — 100 МБ.');
+      e.target.value = '';
+      return;
+    }
+
     const reader = new FileReader();
     reader.onload = (event) => {
       if (event.target?.result) {
@@ -129,7 +139,7 @@ export const ChatInput: React.FC<ChatInputProps> = ({ channelId, channelName }) 
   const quickEmojis = ['🔥', '🎯', '👑', '⚡', '💯', '🎮', '🚀', '🧠'];
 
   return (
-    <div className="p-4 bg-[#09090B] border-t border-white/[0.06] flex flex-col gap-2 relative">
+    <div className="p-4 bg-[#111113]/40 backdrop-blur-md border-t border-white/[0.06] flex flex-col gap-2 relative">
       {/* Reply Snippet Banner */}
       {replyingToMessage && (
         <div className="flex items-center justify-between px-3 py-1.5 rounded-lg bg-[#22D3EE]/10 border border-[#22D3EE]/30 text-xs text-[#22D3EE]">
@@ -195,17 +205,9 @@ export const ChatInput: React.FC<ChatInputProps> = ({ channelId, channelName }) 
         />
 
         <button
-          onClick={() => imageInputRef.current?.click()}
-          title="Отправить фотографию"
-          className="p-2.5 text-[#A1A1AA] hover:text-[#22D3EE] transition-colors ml-1 cursor-pointer"
-        >
-          <ImageIcon className="w-4 h-4" />
-        </button>
-
-        <button
           onClick={triggerFileInput}
           title="Прикрепить файл или медиа"
-          className="p-2.5 text-[#A1A1AA] hover:text-[#22D3EE] transition-colors cursor-pointer"
+          className="p-2.5 text-[#A1A1AA] hover:text-[#22D3EE] transition-colors ml-1 cursor-pointer"
         >
           <Paperclip className="w-4 h-4" />
         </button>

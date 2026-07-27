@@ -41,7 +41,7 @@ export const ScreenShareWindow: React.FC = () => {
 
   const activeStream = isLocalSharer ? localStream : remoteScreenStream;
   const sharerName = isLocalSharer
-    ? currentUser.displayName
+    ? currentUser?.displayName || 'Вы'
     : remoteScreenSharer?.name || 'Участник звонка';
 
   // Real Screen Share stream activation for local user

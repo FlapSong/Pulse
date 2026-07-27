@@ -108,7 +108,7 @@ const LogItem = ({ icon, text, active }: { icon: React.ReactNode, text: string, 
     className="flex items-center gap-3 text-xs"
   >
     <div className={`w-6 h-6 rounded-md flex items-center justify-center ${active ? 'bg-[#22D3EE]/20 text-[#22D3EE]' : 'bg-white/5 text-white/20'}`}>
-      {React.cloneElement(icon as React.ReactElement, { className: 'w-3 h-3' })}
+      {React.cloneElement(icon as React.ReactElement<any>, { className: 'w-3 h-3' })}
     </div>
     <span className={active ? 'text-[#F5F5F7]' : 'text-white/20'}>{text}</span>
   </motion.div>

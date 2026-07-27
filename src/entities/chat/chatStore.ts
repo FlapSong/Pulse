@@ -6,6 +6,41 @@ import { useUserStore } from '../user/userStore';
 import { useGameStore } from '../game/gameStore';
 import { API_BASE, getDmThreadId } from '../../shared/api/config';
 
+const pendingReactions = new Map<string, number>();
+
+function mergeReactions(messageId: string, serverReactions: any[] = [], localReactions: any[] = []): any[] {
+  const emojiMap = new Map<string, { emoji: string; count: number; users: string[] }>();
+
+  const isRecentlyToggled = (emoji: string) => {
+    const key = `${messageId}-${emoji}`;
+    const lastTime = pendingReactions.get(key) || 0;
+    return Date.now() - lastTime < 3000;
+  };
+
+  serverReactions.forEach((sr: any) => {
+    if (isRecentlyToggled(sr.emoji)) {
+      return;
+    }
+    emojiMap.set(sr.emoji, {
+      emoji: sr.emoji,
+      count: sr.count,
+      users: [...(sr.users || [])]
+    });
+  });
+
+  localReactions.forEach((lr: any) => {
+    if (isRecentlyToggled(lr.emoji)) {
+      emojiMap.set(lr.emoji, {
+        emoji: lr.emoji,
+        count: lr.count,
+        users: [...(lr.users || [])]
+      });
+    }
+  });
+
+  return Array.from(emojiMap.values()).filter(r => r.count > 0 && r.users.length > 0);
+}
+
 interface ChatStore {
   messagesByChannel: Record<string, Message[]>;
   unreadCounts: Record<string, number>;
@@ -24,6 +59,8 @@ interface ChatStore {
   setActiveChatUser: (user: User | null) => void;
   toggleReaction: (channelId: string, messageId: string, emoji: string, userId: string) => Promise<void>;
   togglePinMessage: (channelId: string, messageId: string) => void;
+  deleteMessage: (channelId: string, messageId: string, userId: string) => Promise<void>;
+  editMessage: (channelId: string, messageId: string, newContent: string, userId: string) => Promise<void>;
   setReplyingToMessage: (message: Message | null) => void;
   setPinnedFilterActive: (active: boolean) => void;
 }
@@ -44,10 +81,10 @@ export const useChatStore = create<ChatStore>((set, get) => ({
           const prevMsgs = state.messagesByChannel[channelId] || [];
           const merged = data.messages.map((nm: Message) => {
             const pm = prevMsgs.find((p) => p.id === nm.id);
-            if (pm && pm.reactions && pm.reactions.length > 0 && (!nm.reactions || nm.reactions.length === 0)) {
-              return { ...nm, reactions: pm.reactions };
-            }
-            return nm;
+            return {
+              ...nm,
+              reactions: mergeReactions(nm.id, nm.reactions, pm?.reactions)
+            };
           });
           return {
             messagesByChannel: {
@@ -81,10 +118,10 @@ export const useChatStore = create<ChatStore>((set, get) => ({
           }
           const merged = data.messages.map((nm: Message) => {
             const pm = prev.find((p) => p.id === nm.id);
-            if (pm && pm.reactions && pm.reactions.length > 0 && (!nm.reactions || nm.reactions.length === 0)) {
-              return { ...nm, reactions: pm.reactions };
-            }
-            return nm;
+            return {
+              ...nm,
+              reactions: mergeReactions(nm.id, nm.reactions, pm?.reactions)
+            };
           });
           return {
             messagesByChannel: {
@@ -150,10 +187,10 @@ export const useChatStore = create<ChatStore>((set, get) => ({
             // Update thread messages with server data while keeping local reactions and unsynced messages if any
             const mergedNewMsgs = newMsgs.map((nm) => {
               const prevMsg = prevMsgsArr.find((pm) => pm.id === nm.id);
-              if (prevMsg && prevMsg.reactions && prevMsg.reactions.length > 0 && (!nm.reactions || nm.reactions.length === 0)) {
-                return { ...nm, reactions: prevMsg.reactions };
-              }
-              return nm;
+              return {
+                ...nm,
+                reactions: mergeReactions(nm.id, nm.reactions, prevMsg?.reactions)
+              };
             });
 
             if (prevMsgsArr.length > mergedNewMsgs.length) {
@@ -283,6 +320,7 @@ export const useChatStore = create<ChatStore>((set, get) => ({
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
+            id: newMessage.id,
             senderUsername: author.username || author.id,
             recipientUsername,
             content,
@@ -299,6 +337,7 @@ export const useChatStore = create<ChatStore>((set, get) => ({
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
+            id: newMessage.id,
             channelId,
             author,
             content,
@@ -352,44 +391,43 @@ export const useChatStore = create<ChatStore>((set, get) => ({
         if (msg.id !== messageId) return msg;
 
         const reactions = msg.reactions || [];
-        const existingReactionIndex = reactions.findIndex((r) => r.emoji === emoji);
+        const existingReaction = reactions.find((r) => r.emoji === emoji);
+        const userHadThisEmoji = existingReaction?.users.includes(userId);
 
-        if (existingReactionIndex > -1) {
-          const reaction = reactions[existingReactionIndex];
-          const hasUser = reaction.users.includes(userId);
-
-          if (hasUser) {
-            // Remove reaction
-            const newUsers = reaction.users.filter((id) => id !== userId);
-            if (newUsers.length === 0) {
-              return {
-                ...msg,
-                reactions: reactions.filter((_, idx) => idx !== existingReactionIndex)
-              };
-            }
-            const updatedReactions = [...reactions];
-            updatedReactions[existingReactionIndex] = {
-              ...reaction,
-              count: reaction.count - 1,
+        // Remove user from all reactions on this message
+        const cleanedReactions = reactions.map((r) => {
+          if (r.users.includes(userId)) {
+            const newUsers = r.users.filter((id) => id !== userId);
+            return {
+              ...r,
+              count: newUsers.length,
               users: newUsers
             };
-            return { ...msg, reactions: updatedReactions };
-          } else {
-            // Add user to existing emoji reaction
-            const updatedReactions = [...reactions];
-            updatedReactions[existingReactionIndex] = {
-              ...reaction,
-              count: reaction.count + 1,
-              users: [...reaction.users, userId]
-            };
-            return { ...msg, reactions: updatedReactions };
           }
+          return r;
+        }).filter((r) => r.count > 0);
+
+        if (userHadThisEmoji) {
+          // If they clicked the same reaction they already had, it toggles off (removes it)
+          return { ...msg, reactions: cleanedReactions };
         } else {
-          // New emoji reaction
-          return {
-            ...msg,
-            reactions: [...reactions, { emoji, count: 1, users: [userId] }]
-          };
+          // Otherwise, add the new reaction
+          const targetIndex = cleanedReactions.findIndex((r) => r.emoji === emoji);
+          if (targetIndex > -1) {
+            const r = cleanedReactions[targetIndex];
+            const updated = [...cleanedReactions];
+            updated[targetIndex] = {
+              ...r,
+              count: r.count + 1,
+              users: [...r.users, userId]
+            };
+            return { ...msg, reactions: updated };
+          } else {
+            return {
+              ...msg,
+              reactions: [...cleanedReactions, { emoji, count: 1, users: [userId] }]
+            };
+          }
         }
       });
 
@@ -401,12 +439,30 @@ export const useChatStore = create<ChatStore>((set, get) => ({
       };
     });
 
+    // Mark as pending to avoid race conditions with quick interval polling
+    pendingReactions.set(`${messageId}-${emoji}`, Date.now());
+
     try {
-      await fetch(API_BASE + '/api/chat/reaction', {
+      const res = await fetch(API_BASE + '/api/chat/reaction', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ channelId, messageId, emoji, userId })
       });
+      const data = await res.json();
+      if (data.success && Array.isArray(data.reactions)) {
+        set((state) => {
+          const channelMessages = state.messagesByChannel[channelId] || [];
+          const updatedMessages = channelMessages.map((msg) =>
+            msg.id === messageId ? { ...msg, reactions: data.reactions } : msg
+          );
+          return {
+            messagesByChannel: {
+              ...state.messagesByChannel,
+              [channelId]: updatedMessages
+            }
+          };
+        });
+      }
     } catch (e) {
       console.warn('Failed to save reaction on server:', e);
     }
@@ -425,6 +481,65 @@ export const useChatStore = create<ChatStore>((set, get) => ({
         }
       };
     });
+  },
+
+  deleteMessage: async (channelId, messageId, userId) => {
+    set((state) => {
+      const channelMessages = state.messagesByChannel[channelId] || [];
+      const updatedMessages = channelMessages.filter((msg) => msg.id !== messageId);
+      return {
+        messagesByChannel: {
+          ...state.messagesByChannel,
+          [channelId]: updatedMessages
+        }
+      };
+    });
+
+    try {
+      const res = await fetch(API_BASE + '/api/chat/delete', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ channelId, messageId, userId })
+      });
+      const data = await res.json();
+      if (!data.success) {
+        console.warn('Failed to delete message on server:', data.error);
+      }
+    } catch (e) {
+      console.warn('Failed to delete message on server:', e);
+    }
+  },
+
+  editMessage: async (channelId, messageId, newContent, userId) => {
+    set((state) => {
+      const channelMessages = state.messagesByChannel[channelId] || [];
+      const updatedMessages = channelMessages.map((msg) => {
+        if (msg.id === messageId) {
+          return { ...msg, content: newContent };
+        }
+        return msg;
+      });
+      return {
+        messagesByChannel: {
+          ...state.messagesByChannel,
+          [channelId]: updatedMessages
+        }
+      };
+    });
+
+    try {
+      const res = await fetch(API_BASE + '/api/chat/edit', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ channelId, messageId, newContent, userId })
+      });
+      const data = await res.json();
+      if (!data.success) {
+        console.warn('Failed to edit message on server:', data.error);
+      }
+    } catch (e) {
+      console.warn('Failed to edit message on server:', e);
+    }
   },
 
   setReplyingToMessage: (message) => set({ replyingToMessage: message }),

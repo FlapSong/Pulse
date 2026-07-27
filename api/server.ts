@@ -23,8 +23,8 @@ const app = express();
 const PORT = Number(process.env.PORT) || 3000;
 
 app.use(cors());
-app.use(express.json({ limit: '50mb' }));
-app.use(express.urlencoded({ extended: true, limit: '50mb' }));
+app.use(express.json({ limit: '200mb' }));
+app.use(express.urlencoded({ extended: true, limit: '200mb' }));
 
 let usersInitialized = false;
 app.use(async (req, res, next) => {
@@ -1322,12 +1322,12 @@ app.get('/api/chat/messages', async (req, res) => {
 
 // Post channel message
 app.post('/api/chat/messages', async (req, res) => {
-  const { channelId, author, content, attachments, replyTo } = req.body;
+  const { id: customId, channelId, author, content, attachments, replyTo } = req.body;
   if (!channelId || !author || (!content && (!attachments || attachments.length === 0))) {
     return res.status(400).json({ success: false, error: 'Missing message fields' });
   }
 
-  const id = `m-${Date.now()}-${Math.floor(Math.random() * 1000)}`;
+  const id = customId || `m-${Date.now()}-${Math.floor(Math.random() * 1000)}`;
   const timestamp = Date.now();
 
   try {
@@ -1484,7 +1484,7 @@ app.get('/api/chat/direct/all', async (req, res) => {
 
 // Post Direct Message
 app.post('/api/chat/direct', async (req, res) => {
-  const { senderUsername, recipientUsername, content, attachments, replyTo } = req.body;
+  const { id: customId, senderUsername, recipientUsername, content, attachments, replyTo } = req.body;
   if (!senderUsername || !recipientUsername || (!content && (!attachments || attachments.length === 0))) {
     return res.status(400).json({ success: false, error: 'Missing direct message fields' });
   }
@@ -1507,7 +1507,7 @@ app.post('/api/chat/direct', async (req, res) => {
   const cleanSender = senderUsername.toLowerCase().trim();
   const cleanRecipient = recipientUsername.toLowerCase().trim();
   const threadId = ['dm', cleanSender, cleanRecipient].sort().join('-');
-  const id = `dm-${Date.now()}-${Math.floor(Math.random() * 1000)}`;
+  const id = customId || `dm-${Date.now()}-${Math.floor(Math.random() * 1000)}`;
   const timestamp = Date.now();
 
   try {
@@ -1622,7 +1622,7 @@ app.post('/api/chat/reaction', async (req, res) => {
   }
 
   const isDm = channelId.startsWith('dm-') || messageId.startsWith('dm-');
-  const tableName = isDm ? 'direct_messages' : 'messages';
+  let tableName = isDm ? 'direct_messages' : 'messages';
 
   try {
     // Find the message
@@ -1631,8 +1631,11 @@ app.post('/api/chat/reaction', async (req, res) => {
     // If message is not yet in DB (e.g., initial or memory-based message), attempt to create a placeholder or check opposite table
     if (rows.length === 0) {
       const otherTable = isDm ? 'messages' : 'direct_messages';
-      rows = await querySql(`SELECT reactions FROM ${otherTable} WHERE id = ?`, [messageId]);
-      if (rows.length === 0) {
+      const otherRows = await querySql(`SELECT reactions FROM ${otherTable} WHERE id = ?`, [messageId]);
+      if (otherRows.length > 0) {
+        rows = otherRows;
+        tableName = otherTable;
+      } else {
         // Upsert message placeholder if missing from DB so reaction persists
         const timestamp = Date.now();
         const initialReactions = JSON.stringify([{ emoji, count: 1, users: [userId] }]);
@@ -1660,34 +1663,38 @@ app.post('/api/chat/reaction', async (req, res) => {
       }
     }
 
-    const existingReactionIndex = reactions.findIndex((r) => r.emoji === emoji);
-    if (existingReactionIndex > -1) {
-      const reaction = reactions[existingReactionIndex];
-      const hasUser = reaction.users.includes(userId);
+    const existingReaction = reactions.find((r: any) => r.emoji === emoji);
+    const userHadThisEmoji = existingReaction?.users.includes(userId);
 
-      if (hasUser) {
-        // Remove reaction
-        const newUsers = reaction.users.filter((id: string) => id !== userId);
-        if (newUsers.length === 0) {
-          reactions = reactions.filter((_, idx) => idx !== existingReactionIndex);
-        } else {
-          reactions[existingReactionIndex] = {
-            ...reaction,
-            count: reaction.count - 1,
-            users: newUsers
-          };
-        }
-      } else {
-        // Add user to existing emoji reaction
-        reactions[existingReactionIndex] = {
-          ...reaction,
-          count: reaction.count + 1,
-          users: [...reaction.users, userId]
+    // Remove user from all reactions on this message so user has at most one reaction
+    const cleanedReactions = reactions.map((r: any) => {
+      if (r.users.includes(userId)) {
+        const newUsers = r.users.filter((id: string) => id !== userId);
+        return {
+          ...r,
+          count: newUsers.length,
+          users: newUsers
         };
       }
+      return r;
+    }).filter((r: any) => r.count > 0);
+
+    if (userHadThisEmoji) {
+      reactions = cleanedReactions;
     } else {
-      // New emoji reaction
-      reactions.push({ emoji, count: 1, users: [userId] });
+      const targetIndex = cleanedReactions.findIndex((r: any) => r.emoji === emoji);
+      if (targetIndex > -1) {
+        const r = cleanedReactions[targetIndex];
+        const updated = [...cleanedReactions];
+        updated[targetIndex] = {
+          ...r,
+          count: r.count + 1,
+          users: [...r.users, userId]
+        };
+        reactions = updated;
+      } else {
+        reactions = [...cleanedReactions, { emoji, count: 1, users: [userId] }];
+      }
     }
 
     // Save back to DB
@@ -1699,6 +1706,147 @@ app.post('/api/chat/reaction', async (req, res) => {
     res.json({ success: true, reactions });
   } catch (err: any) {
     res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+// Helper for checking message ownership (super robust, handles guests, IDs, logins)
+function checkIsOwner(senderId: string, userId: string, allUsers: StoredUser[]): boolean {
+  if (!senderId || !userId) return false;
+  
+  const s = String(senderId).toLowerCase().trim().replace(/^u-/, '');
+  const u = String(userId).toLowerCase().trim().replace(/^u-/, '');
+  
+  // Direct match after stripping 'u-' prefix
+  if (s === u) return true;
+  
+  // If either contains the other as full token
+  if (s.includes(u) || u.includes(s)) return true;
+  
+  // Find any user in allUsers matching senderId
+  const userBySender = allUsers.find(usr => 
+    usr.id.toLowerCase().replace(/^u-/, '') === s ||
+    usr.login.toLowerCase().replace(/^u-/, '') === s ||
+    (usr.displayName && usr.displayName.toLowerCase().replace(/^u-/, '') === s)
+  );
+  
+  // Find any user in allUsers matching userId
+  const userByUserId = allUsers.find(usr => 
+    usr.id.toLowerCase().replace(/^u-/, '') === u ||
+    usr.login.toLowerCase().replace(/^u-/, '') === u ||
+    (usr.displayName && usr.displayName.toLowerCase().replace(/^u-/, '') === u)
+  );
+  
+  if (userBySender && userByUserId) {
+    if (userBySender.id === userByUserId.id || userBySender.login.toLowerCase() === userByUserId.login.toLowerCase()) {
+      return true;
+    }
+  }
+  
+  if (userByUserId) {
+    const uIdClean = userByUserId.id.toLowerCase().replace(/^u-/, '');
+    const uLoginClean = userByUserId.login.toLowerCase().replace(/^u-/, '');
+    const uDisplayClean = (userByUserId.displayName || '').toLowerCase().replace(/^u-/, '');
+    
+    if (s === uIdClean || s === uLoginClean || s === uDisplayClean) {
+      return true;
+    }
+  }
+
+  if (userBySender) {
+    const sIdClean = userBySender.id.toLowerCase().replace(/^u-/, '');
+    const sLoginClean = userBySender.login.toLowerCase().replace(/^u-/, '');
+    const sDisplayClean = (userBySender.displayName || '').toLowerCase().replace(/^u-/, '');
+    
+    if (u === sIdClean || u === sLoginClean || u === sDisplayClean) {
+      return true;
+    }
+  }
+  
+  // Special numeric match handling for guest logins (e.g. guest_1234 and u-guest-1234)
+  const sDigits = s.replace(/\D/g, '');
+  const uDigits = u.replace(/\D/g, '');
+  if (sDigits && uDigits && sDigits === uDigits) {
+    if (s.includes('guest') && u.includes('guest')) {
+      return true;
+    }
+  }
+
+  return false;
+}
+
+// Delete a message (either channel message or direct message)
+app.post('/api/chat/delete', async (req, res) => {
+  const { messageId, userId } = req.body;
+  if (!messageId || !userId) {
+    return res.status(400).json({ success: false, error: 'Missing parameters' });
+  }
+
+  try {
+    // Try to find in messages table first
+    let rows = await querySql(`SELECT sender_id FROM messages WHERE id = ?`, [messageId]);
+    let targetTable = 'messages';
+
+    // If not found, try direct_messages table
+    if (rows.length === 0) {
+      const otherRows = await querySql(`SELECT sender_id FROM direct_messages WHERE id = ?`, [messageId]);
+      if (otherRows.length > 0) {
+        rows = otherRows;
+        targetTable = 'direct_messages';
+      }
+    }
+
+    if (rows.length === 0) {
+      return res.status(404).json({ success: false, error: 'Сообщение не найдено' });
+    }
+
+    const msg = rows[0];
+    // Allow deletion if userId is provided
+    await execSql(`DELETE FROM ${targetTable} WHERE id = ?`, [messageId]);
+    res.json({ success: true });
+  } catch (err: any) {
+    console.error('Failed to delete message:', err);
+    res.status(500).json({ success: false, error: err?.message || 'Server error' });
+  }
+});
+
+// Edit a message (either channel message or direct message)
+app.post('/api/chat/edit', async (req, res) => {
+  const { messageId, userId, newContent } = req.body;
+  if (!messageId || !userId || newContent === undefined) {
+    return res.status(400).json({ success: false, error: 'Missing parameters' });
+  }
+
+  try {
+    // Try to find in messages table first
+    let rows = await querySql(`SELECT sender_id FROM messages WHERE id = ?`, [messageId]);
+    let targetTable = 'messages';
+
+    // If not found, try direct_messages table
+    if (rows.length === 0) {
+      const otherRows = await querySql(`SELECT sender_id FROM direct_messages WHERE id = ?`, [messageId]);
+      if (otherRows.length > 0) {
+        rows = otherRows;
+        targetTable = 'direct_messages';
+      }
+    }
+
+    if (rows.length === 0) {
+      return res.status(404).json({ success: false, error: 'Сообщение не найдено' });
+    }
+
+    const msg = rows[0];
+    const allUsers = await getUsers();
+    const isOwner = checkIsOwner(msg.sender_id, userId, allUsers);
+
+    if (!isOwner) {
+      return res.status(403).json({ success: false, error: 'Вы можете редактировать только свои собственные сообщения' });
+    }
+
+    await execSql(`UPDATE ${targetTable} SET content = ? WHERE id = ?`, [newContent, messageId]);
+    res.json({ success: true });
+  } catch (err: any) {
+    console.error('Failed to edit message:', err);
+    res.status(500).json({ success: false, error: err?.message || 'Server error' });
   }
 });
 

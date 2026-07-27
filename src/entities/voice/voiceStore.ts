@@ -64,7 +64,16 @@ export const useVoiceStore = create<VoiceStore>((set, get) => ({
     // Clean previous session if any
     webrtcVoice.stopVoiceSession();
 
-    const currentUser = useUserStore.getState().currentUser;
+    const currentUser = useUserStore.getState().currentUser || {
+      id: 'user-guest',
+      username: 'guest',
+      displayName: 'Гость',
+      avatar: 'https://images.unsplash.com/photo-1535713875002-d1d0cf377fde?w=150&auto=format&fit=crop&q=80',
+      status: 'online',
+      customStatus: '⚡ В сети',
+      role: 'Гость'
+    };
+    const currentUserId = currentUser.id || 'user-guest';
     const roomCode = channelId.startsWith('room-') ? channelId : `room-${channelId}`;
 
     set({
@@ -89,7 +98,7 @@ export const useVoiceStore = create<VoiceStore>((set, get) => ({
     webrtcVoice.onLocalVolume = (vol, isSpeaking) => {
       set((state) => ({
         participants: state.participants.map((p) =>
-          p.user.id === currentUser.id
+          p?.user?.id === currentUserId
             ? { ...p, isSpeaking: state.isMuted ? false : isSpeaking }
             : p
         )
@@ -99,14 +108,15 @@ export const useVoiceStore = create<VoiceStore>((set, get) => ({
     webrtcVoice.onRemoteVolume = (vol, isSpeaking) => {
       set((state) => ({
         participants: state.participants.map((p) =>
-          p.user.id !== currentUser.id ? { ...p, isSpeaking, volume: vol } : p
+          p?.user?.id !== currentUserId ? { ...p, isSpeaking, volume: vol } : p
         )
       }));
     };
 
     webrtcVoice.onPeerJoined = (peer: PeerInfo) => {
+      if (!peer || !peer.id) return;
       set((state) => {
-        const exists = state.participants.some((p) => p.user.id === peer.id);
+        const exists = state.participants.some((p) => p?.user?.id === peer.id);
         if (exists) return state;
         return {
           participants: [
@@ -114,17 +124,17 @@ export const useVoiceStore = create<VoiceStore>((set, get) => ({
             {
               user: {
                 id: peer.id,
-                username: `peer_${peer.id.slice(-4)}`,
-                displayName: peer.displayName,
+                username: `peer_${(peer.id || '').slice(-4)}`,
+                displayName: peer.displayName || 'Участник',
                 avatar:
                   peer.avatar ||
                   'https://images.unsplash.com/photo-1535713875002-d1d0cf377fde?w=150&auto=format&fit=crop&q=80',
                 status: 'online',
                 role: 'Друг (Голос)'
               },
-              isMuted: peer.isMuted,
+              isMuted: peer.isMuted || false,
               isDeafened: false,
-              isSpeaking: peer.isSpeaking,
+              isSpeaking: peer.isSpeaking || false,
               isScreenSharing: false,
               volume: 100,
               pingMs: 16
@@ -135,8 +145,9 @@ export const useVoiceStore = create<VoiceStore>((set, get) => ({
     };
 
     webrtcVoice.onPeerLeft = (peerId: string) => {
+      if (!peerId) return;
       set((state) => ({
-        participants: state.participants.filter((p) => p.user.id !== peerId)
+        participants: state.participants.filter((p) => p?.user?.id !== peerId)
       }));
     };
 

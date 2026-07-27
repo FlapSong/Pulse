@@ -115,7 +115,7 @@ export const MemberSidebar: React.FC = () => {
             </div>
 
             {participants
-              .filter((p) => p.user.id !== currentUser.id)
+              .filter((p) => p && p.user && currentUser && p.user.id !== currentUser.id)
               .map((p) => (
                 <div
                   key={p.user.id}
@@ -124,7 +124,7 @@ export const MemberSidebar: React.FC = () => {
                   <div className="flex items-center gap-2.5 min-w-0">
                     <Avatar
                       src={p.user.avatar}
-                      alt={p.user.displayName}
+                      alt={p.user.displayName || 'Участник'}
                       status="online"
                       size="md"
                       isSpeaking={p.isSpeaking}
@@ -132,7 +132,7 @@ export const MemberSidebar: React.FC = () => {
                     <div className="truncate">
                       <div className="flex items-center gap-1.5">
                         <span className="text-xs font-bold text-[#F5F5F7] truncate">
-                          {p.user.displayName}
+                          {p.user.displayName || 'Участник'}
                         </span>
                         <span className="text-[9px] uppercase px-1.5 py-0.2 rounded font-mono font-bold bg-emerald-500/20 text-emerald-300 border border-emerald-500/30">
                           LIVE

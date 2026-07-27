@@ -8,7 +8,7 @@ import {
   Volume2,
   Reply,
   FileCode,
-  Download, X, ArrowDown,
+  Download, X, ArrowDown, Trash2, Copy, Edit, Check, MousePointerClick
 } from 'lucide-react';
 import { useCommunityStore } from '../../entities/community/communityStore';
 import { useChatStore } from '../../entities/chat/chatStore';
@@ -16,6 +16,7 @@ import { useUserStore } from '../../entities/user/userStore';
 import { useVoiceStore } from '../../entities/voice/voiceStore';
 import { ChatInput } from '../../features/chat-input/ChatInput';
 import { Avatar } from '../../shared/ui/Avatar';
+import { Message } from '../../shared/types';
 
 interface ChatAreaProps {
   onToggleMembers: () => void;
@@ -24,13 +25,60 @@ interface ChatAreaProps {
 
 export const ChatArea: React.FC<ChatAreaProps> = ({ onToggleMembers, showMembers }) => {
   const { getActiveChannel, searchQuery, setSearchQuery } = useCommunityStore();
-  const { messagesByChannel, fetchChannelMessages, toggleReaction, togglePinMessage, setReplyingToMessage } =
+  const { messagesByChannel, fetchChannelMessages, toggleReaction, togglePinMessage, deleteMessage, editMessage, setReplyingToMessage } =
     useChatStore();
   const { currentUser, friends } = useUserStore();
   const { connectToVoice } = useVoiceStore();
 
   const [showPinnedOnly, setShowPinnedOnly] = useState(false);
   const [lightboxImage, setLightboxImage] = useState<string | null>(null);
+  const [editingMessageId, setEditingMessageId] = useState<string | null>(null);
+  const [editingText, setEditingText] = useState<string>('');
+  const [contextMenu, setContextMenu] = useState<{
+    x: number;
+    y: number;
+    messageId: string;
+    senderId: string;
+    messageText: string;
+    isPinned: boolean;
+    messageObj: Message;
+  } | null>(null);
+
+  useEffect(() => {
+    const handleClose = () => setContextMenu(null);
+    window.addEventListener('click', handleClose);
+    window.addEventListener('contextmenu', handleClose);
+    return () => {
+      window.removeEventListener('click', handleClose);
+      window.removeEventListener('contextmenu', handleClose);
+    };
+  }, []);
+
+  const showContextMenu = (e: React.MouseEvent, msg: Message) => {
+    e.preventDefault();
+    e.stopPropagation();
+    const menuWidth = 180;
+    const menuHeight = 160;
+    let x = e.clientX;
+    let y = e.clientY;
+
+    if (x + menuWidth > window.innerWidth) {
+      x = window.innerWidth - menuWidth - 10;
+    }
+    if (y + menuHeight > window.innerHeight) {
+      y = window.innerHeight - menuHeight - 10;
+    }
+
+    setContextMenu({
+      x,
+      y,
+      messageId: msg.id,
+      senderId: msg.author.id,
+      messageText: msg.content,
+      isPinned: !!msg.isPinned,
+      messageObj: msg
+    });
+  };
 
   const scrollContainerRef = useRef<HTMLDivElement>(null);
   const messagesEndRef = useRef<HTMLDivElement>(null);
@@ -137,7 +185,7 @@ export const ChatArea: React.FC<ChatAreaProps> = ({ onToggleMembers, showMembers
   return (
     <div className="flex-1 bg-transparent flex flex-col h-full overflow-hidden">
       {/* Top Channel Bar */}
-      <div className="h-14 px-4 bg-[#111113] border-b border-white/[0.06] flex items-center justify-between z-10 flex-shrink-0 select-none">
+      <div className="h-14 px-4 bg-[#111113]/80 backdrop-blur-md border-b border-white/[0.06] flex items-center justify-between z-10 flex-shrink-0 select-none">
         <div className="flex items-center gap-2.5 min-w-0">
           <Hash className="w-4 h-4 text-[#22D3EE] flex-shrink-0" />
           <div className="truncate">
@@ -209,7 +257,7 @@ export const ChatArea: React.FC<ChatAreaProps> = ({ onToggleMembers, showMembers
       <div 
         ref={scrollContainerRef}
         onScroll={handleScroll}
-        className="flex-1 overflow-y-auto p-4 pb-32 space-y-3 no-scrollbar"
+        className="flex-1 overflow-y-auto p-4 pb-32 flex flex-col gap-1 no-scrollbar"
       >
         {filteredMessages.length === 0 ? (
           <div className="h-full flex flex-col items-center justify-center text-center p-8">
@@ -224,60 +272,141 @@ export const ChatArea: React.FC<ChatAreaProps> = ({ onToggleMembers, showMembers
             </p>
           </div>
         ) : (
-          filteredMessages.map((msg) => (
-            <motion.div
-              key={msg.id}
-              initial={{ opacity: 0, y: 10 }}
-              animate={{ opacity: 1, y: 0 }}
-              transition={{ duration: 0.15, ease: 'easeOut' }}
-              className={`
-                group relative flex gap-3 p-3 rounded-2xl transition-all duration-150 hover:bg-[#17171C]/80 border border-transparent hover:border-white/[0.06]
-                ${msg.isPinned ? 'bg-[#22D3EE]/10 border-[#22D3EE]/30' : ''}
-              `}
-            >
-              <Avatar
-                src={msg.author.avatar}
-                alt={msg.author.displayName}
-                status={msg.author.id === currentUser.id ? currentUser.status : (friends.find(f => f.id === msg.author.id)?.status || msg.author.status)}
-                size="md"
-              />
+          filteredMessages.map((msg, index) => {
+            const prevMsg = index > 0 ? filteredMessages[index - 1] : null;
+            const isConsecutive = prevMsg && 
+                                 (prevMsg.author.id === msg.author.id || prevMsg.author.username === msg.author.username) && 
+                                 !msg.isPinned && 
+                                 !prevMsg.isPinned &&
+                                 !msg.replyTo;
+            const shortTime = msg.timestamp.match(/\d{2}:\d{2}/)?.[0] || msg.timestamp;
 
-              <div className="flex-1 min-w-0">
-                {/* Header */}
-                <div className="flex items-center gap-2 mb-1">
-                  <span className="text-xs font-bold text-[#F5F5F7]">
-                    {msg.author.displayName}
-                  </span>
-
-                  {msg.author.badge && (
-                    <span className="text-[9px] uppercase tracking-wider px-1.5 py-0.2 font-mono font-bold rounded bg-[#22D3EE]/20 text-[#22D3EE] border border-[#22D3EE]/30">
-                      {msg.author.badge}
+            return (
+              <motion.div
+                key={msg.id}
+                initial={{ opacity: 0, y: 10 }}
+                animate={{ opacity: 1, y: 0 }}
+                transition={{ duration: 0.15, ease: 'easeOut' }}
+                onContextMenu={(e) => showContextMenu(e, msg)}
+                className={`
+                  group relative flex gap-3 transition-all duration-150 hover:cursor-context-menu border border-transparent
+                  ${isConsecutive 
+                    ? 'px-3 py-1 rounded-xl hover:bg-[#17171C]/60 hover:border-white/[0.04]' 
+                    : `p-3 rounded-2xl hover:bg-[#17171C]/80 hover:border-white/[0.06] ${msg.isPinned ? 'bg-[#22D3EE]/10 border-[#22D3EE]/30' : ''}`
+                  }
+                  ${!isConsecutive && index > 0 ? 'mt-3' : ''}
+                `}
+              >
+                {isConsecutive ? (
+                  <div className="w-9 h-5 flex-shrink-0 flex items-center justify-center text-right text-[9px] text-[#A1A1AA]/50 select-none">
+                    <span className="opacity-0 group-hover:opacity-100 transition-opacity duration-100">
+                      {shortTime}
                     </span>
-                  )}
-
-                  <span className="text-[10px] text-[#A1A1AA]">{msg.timestamp}</span>
-
-                  {msg.isPinned && (
-                    <span className="flex items-center gap-1 text-[10px] text-[#22D3EE] font-bold ml-auto bg-[#22D3EE]/10 px-2 py-0.5 rounded-full border border-[#22D3EE]/30">
-                      <Pin className="w-3 h-3" /> Закреплено
-                    </span>
-                  )}
-                </div>
-
-                {/* Replying Snippet */}
-                {msg.replyTo && (
-                  <div className="mb-1.5 pr-2 border-r-2 border-[#22D3EE] text-xs text-[#A1A1AA] flex items-center justify-end gap-1.5 flex-row-reverse">
-                    <span className="text-[#22D3EE] font-semibold">
-                      @{msg.replyTo.authorName}:
-                    </span>
-                    <span className="italic truncate">{msg.replyTo.contentSnippet}</span>
                   </div>
+                ) : (
+                  <Avatar
+                    src={msg.author.avatar}
+                    alt={msg.author.displayName}
+                    status={msg.author.id === currentUser.id ? currentUser.status : (friends.find(f => f.id === msg.author.id)?.status || msg.author.status)}
+                    size="md"
+                  />
                 )}
 
-                {/* Message Body */}
-                <div className="text-xs text-[#F5F5F7] leading-relaxed break-words">
-                  {msg.content}
-                </div>
+                <div className="flex flex-col items-start max-w-[85%] relative">
+                  {/* Top-right hover indicator */}
+                  <div className="absolute right-0 -top-2.5 opacity-0 group-hover:opacity-100 transition-opacity duration-150 text-[9px] font-semibold text-amber-400 bg-[#111113]/90 border border-amber-500/30 px-1.5 py-0.5 rounded-md pointer-events-none z-10 select-none shadow-md">
+                    ПКМ
+                  </div>
+                  {/* Header */}
+                  {!isConsecutive && (
+                    <div className="flex items-center gap-2 mb-1">
+                      <span className="text-xs font-bold text-[#F5F5F7]">
+                        {msg.author.displayName}
+                      </span>
+
+                      {msg.author.badge && (
+                        <span className="text-[9px] uppercase tracking-wider px-1.5 py-0.2 font-mono font-bold rounded bg-[#22D3EE]/20 text-[#22D3EE] border border-[#22D3EE]/30">
+                          {msg.author.badge}
+                        </span>
+                      )}
+
+                      <span className="text-[10px] text-[#A1A1AA]">{msg.timestamp}</span>
+
+
+
+
+
+                      {msg.isPinned && (
+                        <span className="flex items-center gap-1 text-[10px] text-[#22D3EE] font-bold ml-auto bg-[#22D3EE]/10 px-2 py-0.5 rounded-full border border-[#22D3EE]/30">
+                          <Pin className="w-3 h-3" /> Закреплено
+                        </span>
+                      )}
+                    </div>
+                  )}
+
+                  {/* Replying Snippet */}
+                  {!isConsecutive && msg.replyTo && (
+                    <div className="mb-1.5 pr-2 border-r-2 border-[#22D3EE] text-xs text-[#A1A1AA] flex items-center justify-end gap-1.5 flex-row-reverse">
+                      <span className="text-[#22D3EE] font-semibold">
+                        @{msg.replyTo.authorName}:
+                      </span>
+                      <span className="italic truncate">{msg.replyTo.contentSnippet}</span>
+                    </div>
+                  )}
+
+                  {/* Message Body */}
+                {editingMessageId === msg.id ? (
+                  <div className="flex flex-col gap-2.5 my-1 bg-[#121215] border border-[#22D3EE]/30 rounded-2xl p-3 shadow-xl backdrop-blur-md" onClick={(e) => e.stopPropagation()} onContextMenu={(e) => e.stopPropagation()}>
+                    <div className="flex items-center justify-between text-[11px] text-[#22D3EE] font-semibold px-1">
+                      <span className="flex items-center gap-1.5">
+                        <Edit className="w-3 h-3" /> Редактирование сообщения
+                      </span>
+                      <span className="text-[10px] text-[#A1A1AA]">Esc для отмены, Enter ↵ для сохранения</span>
+                    </div>
+                    <textarea
+                      value={editingText}
+                      onChange={(e) => setEditingText(e.target.value)}
+                      onKeyDown={(e) => {
+                        if (e.key === 'Enter' && !e.shiftKey) {
+                          e.preventDefault();
+                          editMessage(activeChannel.id, msg.id, editingText, currentUser.id);
+                          setEditingMessageId(null);
+                        } else if (e.key === 'Escape') {
+                          setEditingMessageId(null);
+                        }
+                      }}
+                      className="w-full bg-[#18181B] border border-white/10 focus:border-[#22D3EE] rounded-xl px-3.5 py-2.5 text-xs text-[#F5F5F7] outline-none resize-none min-h-[64px] shadow-inner transition-colors"
+                      placeholder="Введите новый текст..."
+                      autoComplete="off"
+                      autoCorrect="off"
+                      spellCheck={false}
+                      autoFocus
+                    />
+                    <div className="flex items-center justify-end gap-2 pt-1">
+                      <button
+                        onClick={() => setEditingMessageId(null)}
+                        className="px-3 py-1.5 rounded-xl bg-white/5 hover:bg-white/10 text-[#A1A1AA] hover:text-white text-xs font-semibold transition-all cursor-pointer flex items-center gap-1"
+                      >
+                        <X className="w-3 h-3" />
+                        <span>Отмена</span>
+                      </button>
+                      <button
+                        onClick={() => {
+                          editMessage(activeChannel.id, msg.id, editingText, currentUser.id);
+                          setEditingMessageId(null);
+                        }}
+                        className="px-3.5 py-1.5 rounded-xl bg-[#22D3EE] hover:bg-[#06b6d4] text-[#09090B] text-xs font-bold transition-all cursor-pointer flex items-center gap-1.5 shadow-lg shadow-cyan-500/20"
+                      >
+                        <Check className="w-3.5 h-3.5" />
+                        <span>Сохранить</span>
+                      </button>
+                    </div>
+                  </div>
+                ) : (
+                  <div className="text-xs text-[#F5F5F7] leading-relaxed break-words">
+                    {msg.content}
+                  </div>
+                )}
 
                 {/* Attachments */}
                 {msg.attachments && msg.attachments.length > 0 && (
@@ -383,55 +512,10 @@ export const ChatArea: React.FC<ChatAreaProps> = ({ onToggleMembers, showMembers
                   </div>
                 )}
 
-                {/* Message Reactions */}
-                {msg.reactions && msg.reactions.length > 0 && (
-                  <div className="flex items-center justify-end flex-row-reverse gap-1.5 mt-2 flex-wrap">
-                    {msg.reactions.map((react) => {
-                      const hasReacted = react.users.includes(currentUser.id);
-                      return (
-                        <button
-                          key={react.emoji}
-                          onClick={() =>
-                            toggleReaction(activeChannel.id, msg.id, react.emoji, currentUser.id)
-                          }
-                          className={`
-                            inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-xs font-mono transition-all cursor-pointer
-                            ${
-                              hasReacted
-                                ? 'bg-[#22D3EE]/20 border border-[#22D3EE]/40 text-[#22D3EE] font-bold'
-                                : 'bg-[#17171C] border border-white/[0.08] text-[#A1A1AA] hover:text-[#F5F5F7]'
-                            }
-                          `}
-                        >
-                          <span>{react.emoji}</span>
-                          <span>{react.count}</span>
-                        </button>
-                      );
-                    })}
-                  </div>
-                )}
-              </div>
+                </div>
 
               {/* Floating Action Menu on Message Hover */}
               <div className="absolute left-3 top-2 opacity-0 group-hover:opacity-100 transition-opacity bg-[#111113] border border-white/[0.08] rounded-xl p-1 shadow-2xl flex items-center gap-1 flex-row-reverse">
-                <button
-                  onClick={() =>
-                    toggleReaction(activeChannel.id, msg.id, '⚡', currentUser.id)
-                  }
-                  title="Pulse Reaction"
-                  className="p-1 hover:bg-white/[0.08] rounded-lg text-xs cursor-pointer"
-                >
-                  ⚡
-                </button>
-                <button
-                  onClick={() =>
-                    toggleReaction(activeChannel.id, msg.id, '🎯', currentUser.id)
-                  }
-                  title="Target Reaction"
-                  className="p-1 hover:bg-white/[0.08] rounded-lg text-xs cursor-pointer"
-                >
-                  🎯
-                </button>
                 <button
                   onClick={() => setReplyingToMessage(msg)}
                   title="Ответить"
@@ -448,7 +532,7 @@ export const ChatArea: React.FC<ChatAreaProps> = ({ onToggleMembers, showMembers
                 </button>
               </div>
             </motion.div>
-          ))
+          ); })
         )}
         <div ref={messagesEndRef} />
       </div>
@@ -484,6 +568,78 @@ export const ChatArea: React.FC<ChatAreaProps> = ({ onToggleMembers, showMembers
             className="max-w-full max-h-full object-contain rounded-lg shadow-2xl"
             onClick={(e) => e.stopPropagation()}
           />
+        </div>
+      )}
+
+      {/* Message Context Menu */}
+      {contextMenu && (
+        <div
+          style={{ top: contextMenu.y, left: contextMenu.x }}
+          className="fixed bg-[#09090B] border border-white/[0.08] rounded-xl p-1 shadow-2xl z-[100] flex flex-col min-w-[170px] animate-in fade-in zoom-in-95 duration-100"
+          onClick={(e) => e.stopPropagation()}
+        >
+          <button
+            onClick={() => {
+              setReplyingToMessage(contextMenu.messageObj);
+              setContextMenu(null);
+            }}
+            className="flex items-center gap-2 px-3 py-2 text-xs text-[#A1A1AA] hover:text-[#F5F5F7] hover:bg-white/5 rounded-lg text-left cursor-pointer transition-colors"
+          >
+            <Reply className="w-3.5 h-3.5" />
+            <span>Ответить</span>
+          </button>
+          
+          <button
+            onClick={() => {
+              togglePinMessage(activeChannel.id, contextMenu.messageId);
+              setContextMenu(null);
+            }}
+            className="flex items-center gap-2 px-3 py-2 text-xs text-[#A1A1AA] hover:text-[#22D3EE] hover:bg-white/5 rounded-lg text-left cursor-pointer transition-colors"
+          >
+            <Pin className="w-3.5 h-3.5" />
+            <span>{contextMenu.isPinned ? 'Открепить' : 'Закрепить'}</span>
+          </button>
+
+          <button
+            onClick={() => {
+              navigator.clipboard.writeText(contextMenu.messageText);
+              setContextMenu(null);
+            }}
+            className="flex items-center gap-2 px-3 py-2 text-xs text-[#A1A1AA] hover:text-[#F5F5F7] hover:bg-white/5 rounded-lg text-left cursor-pointer transition-colors"
+          >
+            <Copy className="w-3.5 h-3.5" />
+            <span>Копировать текст</span>
+          </button>
+
+          {(String(contextMenu.senderId) === String(currentUser.id) || 
+            (contextMenu.messageObj?.author?.username && contextMenu.messageObj.author.username === currentUser.username)) && (
+            <>
+              <div className="h-px bg-white/5 my-1" />
+              <button
+                onClick={() => {
+                  setEditingMessageId(contextMenu.messageId);
+                  setEditingText(contextMenu.messageText);
+                  setContextMenu(null);
+                }}
+                className="flex items-center gap-2 px-3 py-2 text-xs text-[#A1A1AA] hover:text-[#22D3EE] hover:bg-white/5 rounded-lg text-left cursor-pointer transition-colors"
+              >
+                <Edit className="w-3.5 h-3.5" />
+                <span>Редактировать</span>
+              </button>
+              <button
+                onClick={() => {
+                  if (confirm('Вы уверены, что хотите удалить это сообщение для всех?')) {
+                    deleteMessage(activeChannel.id, contextMenu.messageId, currentUser.id);
+                  }
+                  setContextMenu(null);
+                }}
+                className="flex items-center gap-2 px-3 py-2 text-xs text-rose-500 hover:bg-rose-500/10 hover:text-rose-400 rounded-lg text-left cursor-pointer transition-colors"
+              >
+                <Trash2 className="w-3.5 h-3.5" />
+                <span>Удалить сообщение</span>
+              </button>
+            </>
+          )}
         </div>
       )}
     </div>

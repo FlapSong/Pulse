@@ -134,15 +134,15 @@ export const CommunitySidebar: React.FC = () => {
                         {/* Active Voice Participants */}
                         {isVoiceChannel && isVoiceConnected && (
                           <div className="ml-5 my-1 pl-2 border-l border-[#22D3EE]/30 space-y-1 py-1">
-                            {participants.map((p) => (
+                            {participants.filter(p => p && p.user).map((p, idx) => (
                               <div
-                                key={p.user.id}
+                                key={p.user.id || idx}
                                 className="flex items-center justify-between text-xs py-0.5 pr-2"
                               >
                                 <div className="flex items-center gap-2 min-w-0">
                                   <Avatar
                                     src={p.user.avatar}
-                                    alt={p.user.displayName}
+                                    alt={p.user.displayName || 'Участник'}
                                     size="sm"
                                     isSpeaking={p.isSpeaking}
                                   />
@@ -151,7 +151,7 @@ export const CommunitySidebar: React.FC = () => {
                                       p.isSpeaking ? 'text-[#22D3EE] font-bold' : 'text-[#F5F5F7]'
                                     }`}
                                   >
-                                    {p.user.displayName}
+                                    {p.user.displayName || 'Участник'}
                                   </span>
                                 </div>
                                 {p.isSpeaking && (

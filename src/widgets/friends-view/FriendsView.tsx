@@ -32,7 +32,9 @@ import {
   ArrowDown,
   Download,
   MoreVertical,
-  Trash2
+  Trash2,
+  Edit,
+  MousePointerClick
 } from 'lucide-react';
 import { Avatar } from '../../shared/ui/Avatar';
 import { useUserStore } from '../../entities/user/userStore';
@@ -103,15 +105,40 @@ export const FriendsView: React.FC = () => {
   const chatMenuRef = useRef<HTMLDivElement>(null);
   const [openFriendMenuUsername, setOpenFriendMenuUsername] = useState<string | null>(null);
 
+  const [editingMessageId, setEditingMessageId] = useState<string | null>(null);
+  const [editingText, setEditingText] = useState<string>('');
+
+  const [contextMenu, setContextMenu] = useState<{
+    x: number;
+    y: number;
+    messageId: string;
+    senderId: string;
+    messageText: string;
+    messageObj: any;
+  } | null>(null);
+
+  useEffect(() => {
+    const handleClose = () => setContextMenu(null);
+    window.addEventListener('click', handleClose);
+    window.addEventListener('contextmenu', handleClose);
+    return () => {
+      window.removeEventListener('click', handleClose);
+      window.removeEventListener('contextmenu', handleClose);
+    };
+  }, []);
+
   const prevDmCountRef = useRef<number>(0);
   const prevDmLastIdRef = useRef<string | null>(null);
 
   // useChatStore
   const {
     messagesByChannel,
+    unreadCounts,
     sendMessage,
     fetchDirectMessages,
     toggleReaction,
+    deleteMessage,
+    editMessage,
     activeChatUser,
     setActiveChatUser,
     incrementUnreadCount,
@@ -287,6 +314,127 @@ export const FriendsView: React.FC = () => {
 
   const onlineFriends = friends.filter((f) => f.status !== 'offline');
 
+  const renderDmSidebar = () => {
+    return (
+      <motion.div
+        initial={{ x: -260 }}
+        animate={{ x: 0 }}
+        exit={{ x: -260 }}
+        transition={{ type: 'spring', damping: 30, stiffness: 220 }}
+        className={`w-64 bg-[#111113]/85 backdrop-blur-md border-r border-white/[0.06] flex flex-col h-full shrink-0 select-none ${
+          activeChatUser ? 'hidden md:flex' : 'flex w-full md:w-64'
+        }`}
+      >
+        {/* Header */}
+        <div className="h-16 px-4 border-b border-white/[0.06] flex items-center justify-between bg-[#111113]/50 shrink-0">
+          <div className="flex items-center gap-2">
+            <MessageSquare className="w-4 h-4 text-[#22D3EE]" />
+            <span className="text-xs font-black uppercase tracking-wider text-[#A1A1AA]">Чаты</span>
+          </div>
+          {isDevMode && (
+            <button
+              onClick={() => {
+                if (currentUser?.username) {
+                  const botNames = ['Кибер-Святослав', 'Робо-Мария', 'Алекс-Гик', 'Нейро-Алиса'];
+                  const randomName = botNames[Math.floor(Math.random() * botNames.length)];
+                  const randomMessages = [
+                    'Привет! 👋 Проверяю отображение аватарки и счётчика на боковой панели!',
+                    'Как дела? Залетай в Pulse Arena! 🎮',
+                    'Зацени новое оформление личных сообщений! 🚀',
+                    'Привет, ты тут? Напиши, как освободишься 💬'
+                  ];
+                  const randomText = randomMessages[Math.floor(Math.random() * randomMessages.length)];
+                  simulateIncomingMessage(currentUser.username, randomName, randomText);
+                }
+              }}
+              className="p-1.5 rounded-lg bg-[#22D3EE]/10 hover:bg-[#22D3EE]/25 text-[#22D3EE] border border-[#22D3EE]/20 flex items-center gap-1 transition-all cursor-pointer shadow-sm active:scale-95"
+              title="🧪 Протестировать ЛС"
+            >
+              <Sparkles className="w-3.5 h-3.5" />
+              <span className="text-[9px] font-extrabold uppercase">Тест</span>
+            </button>
+          )}
+        </div>
+
+        {/* Home/Friends Hub Row */}
+        <div className="p-2 shrink-0">
+          <button
+            onClick={() => setActiveChatUser(null)}
+            className={`w-full flex items-center gap-3 px-3.5 py-3 rounded-xl text-xs font-bold transition-all border ${
+              activeChatUser === null
+                ? 'bg-[#22D3EE]/10 text-[#22D3EE] border-[#22D3EE]/30 shadow-[0_0_15px_rgba(34,211,238,0.1)]'
+                : 'bg-transparent text-[#A1A1AA] border-transparent hover:text-[#F5F5F7] hover:bg-white/[0.04]'
+            }`}
+          >
+            <Users className="w-4 h-4" />
+            <span className="flex-1 text-left">Главная и Друзья</span>
+            {incomingRequests.length > 0 && (
+              <span className="bg-rose-500 text-white text-[10px] font-black px-1.5 py-0.5 rounded-full shadow-lg shrink-0">
+                {incomingRequests.length}
+              </span>
+            )}
+          </button>
+        </div>
+
+        {/* List of direct messages */}
+        <div className="flex-1 overflow-y-auto px-2 py-1 space-y-0.5 no-scrollbar">
+          <div className="px-3 py-1.5 text-[9px] font-black tracking-wider text-[#A1A1AA]/50 uppercase flex items-center justify-between">
+            <span>ЛИЧНЫЕ СООБЩЕНИЯ</span>
+            <span className="text-[9px] text-[#22D3EE]/80 font-mono">@{currentUser.username}</span>
+          </div>
+
+          {friends.length === 0 ? (
+            <div className="p-4 text-center text-[#A1A1AA] text-[11px] bg-white/[0.01] rounded-2xl border border-white/[0.02] mx-2 my-2">
+              Добавьте друзей, чтобы начать общение!
+            </div>
+          ) : (
+            friends.map((friend) => {
+              const threadId = getDmThreadId(currentUser.username, friend.username);
+              const count = unreadCounts[threadId] || 0;
+              const isActive = activeChatUser?.id === friend.id;
+
+              return (
+                <button
+                  key={friend.id}
+                  onClick={() => setActiveChatUser(friend)}
+                  className={`w-full flex items-center gap-3 px-3 py-2.5 rounded-xl text-xs font-semibold transition-all border group relative ${
+                    isActive
+                      ? 'bg-[#22D3EE]/15 text-[#22D3EE] border-[#22D3EE]/30 shadow-[0_0_15px_rgba(34,211,238,0.05)]'
+                      : 'bg-transparent text-[#A1A1AA] border-transparent hover:bg-white/[0.03] hover:text-[#F5F5F7]'
+                  }`}
+                >
+                  <div className="relative shrink-0">
+                    <Avatar
+                      src={friend.avatar}
+                      alt={friend.displayName}
+                      status={friend.status}
+                      size="sm"
+                    />
+                  </div>
+
+                  <div className="flex-1 min-w-0 text-left">
+                    <div className="font-bold truncate text-[#F5F5F7] group-hover:text-white transition-colors">
+                      {friend.displayName}
+                    </div>
+                    <div className="text-[10px] text-[#A1A1AA] truncate font-normal">
+                      {friend.customStatus || 'В сети в Pulse'}
+                    </div>
+                  </div>
+
+                  {count > 0 && (
+                    <span className="bg-[#22D3EE] text-[#09090B] font-extrabold text-[10px] px-2 py-0.5 rounded-full shrink-0 shadow-[0_0_8px_rgba(34,211,238,0.4)] animate-bounce" style={{ animationDuration: '2.5s' }}>
+                      {count}
+                    </span>
+                  )}
+                </button>
+              );
+            })
+          )}
+        </div>
+      </motion.div>
+    );
+  };
+
   useEffect(() => {
     if (activeChatUser) {
         const threadId = getDmThreadId(currentUser.username, activeChatUser.username);
@@ -294,106 +442,131 @@ export const FriendsView: React.FC = () => {
     }
   }, [activeChatUser, markAsRead, currentUser.username]);
 
-  if (activeChatUser) {
-    const threadId = getDmThreadId(currentUser.username, activeChatUser.username);
-    const threadMessages = messagesByChannel[threadId] || [];
+  const threadId = activeChatUser ? getDmThreadId(currentUser.username, activeChatUser.username) : '';
+  const threadMessages = activeChatUser ? (messagesByChannel[threadId] || []) : [];
 
-    const handleSendDm = () => {
-      if (!chatInput.trim() && dmAttachments.length === 0) return;
-      sendMessage(threadId, currentUser, chatInput.trim(), dmAttachments, undefined, activeChatUser.username);
-      setChatInput('');
-      setDmAttachments([]);
-    };
+  const handleSendDm = () => {
+    if (!activeChatUser) return;
+    if (!chatInput.trim() && dmAttachments.length === 0) return;
+    sendMessage(threadId, currentUser, chatInput.trim(), dmAttachments, undefined, activeChatUser.username);
+    setChatInput('');
+    setDmAttachments([]);
+  };
 
-    const handleKeyDown = (e: React.KeyboardEvent<HTMLInputElement>) => {
-      if (e.key === 'Enter') {
-        handleSendDm();
-      }
-    };
+  const handleKeyDown = (e: React.KeyboardEvent<HTMLInputElement>) => {
+    if (e.key === 'Enter') {
+      handleSendDm();
+    }
+  };
 
-    const handlePasteDm = (e: React.ClipboardEvent<HTMLInputElement>) => {
-      const items = e.clipboardData?.items;
-      if (!items) return;
+  const handlePasteDm = (e: React.ClipboardEvent<HTMLInputElement>) => {
+    const items = e.clipboardData?.items;
+    if (!items) return;
 
-      for (let i = 0; i < items.length; i++) {
-        const item = items[i];
-        if (item.type.indexOf('image') !== -1) {
-          const file = item.getAsFile();
-          if (file) {
-            const reader = new FileReader();
-            reader.onload = (event) => {
-              if (event.target?.result) {
-                setDmAttachments([
-                  {
-                    id: `att-${Date.now()}`,
-                    type: 'image',
-                    name: file.name || `photo_${Date.now()}.png`,
-                    url: event.target.result as string
-                  }
-                ]);
-              }
-            };
-            reader.readAsDataURL(file);
+    for (let i = 0; i < items.length; i++) {
+      const item = items[i];
+      if (item.type.indexOf('image') !== -1) {
+        const file = item.getAsFile();
+        if (file) {
+          if (file.size > 100 * 1024 * 1024) {
+            alert('Изображение слишком большое! Максимальный размер — 100 МБ.');
+            return;
           }
-        }
-      }
-    };
-
-    const toggleReactionDm = (msgId: string, emoji: string) => {
-      toggleReaction(threadId, msgId, emoji, currentUser.id);
-    };
-
-    const addPresetMessage = (preset: string) => {
-      sendMessage(threadId, currentUser, preset, [], undefined, activeChatUser.username);
-    };
-
-    const handleDmFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
-      const file = e.target.files?.[0];
-      if (!file) return;
-
-      const reader = new FileReader();
-      reader.onload = (event) => {
-        if (event.target?.result) {
-          let fileType = 'file';
-          if (file.type.startsWith('image/')) {
-            fileType = 'image';
-          } else if (file.type.startsWith('audio/')) {
-            fileType = 'audio';
-          } else if (file.type.startsWith('video/')) {
-            fileType = 'video';
-          }
-
-          setDmAttachments([
-            {
-              id: `att-${Date.now()}`,
-              type: fileType,
-              name: file.name,
-              url: event.target.result as string
+          const reader = new FileReader();
+          reader.onload = (event) => {
+            if (event.target?.result) {
+              setDmAttachments([
+                {
+                  id: `att-${Date.now()}`,
+                  type: 'image',
+                  name: file.name || `photo_${Date.now()}.png`,
+                  url: event.target.result as string
+                }
+              ]);
             }
-          ]);
+          };
+          reader.readAsDataURL(file);
         }
-      };
-      reader.readAsDataURL(file);
+      }
+    }
+  };
+
+  const toggleReactionDm = (msgId: string, emoji: string) => {
+    if (!activeChatUser) return;
+    toggleReaction(threadId, msgId, emoji, currentUser.id);
+  };
+
+  const addPresetMessage = (preset: string) => {
+    if (!activeChatUser) return;
+    sendMessage(threadId, currentUser, preset, [], undefined, activeChatUser.username);
+  };
+
+  const handleDmFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+
+    if (file.size > 100 * 1024 * 1024) {
+      alert('Файл слишком большой! Максимальный размер фото или файла — 100 МБ.');
       e.target.value = '';
+      return;
+    }
+
+    const reader = new FileReader();
+    reader.onload = (event) => {
+      if (event.target?.result) {
+        let fileType = 'file';
+        if (file.type.startsWith('image/')) {
+          fileType = 'image';
+        } else if (file.type.startsWith('audio/')) {
+          fileType = 'audio';
+        } else if (file.type.startsWith('video/')) {
+          fileType = 'video';
+        }
+
+        setDmAttachments([
+          {
+            id: `att-${Date.now()}`,
+            type: fileType,
+            name: file.name,
+            url: event.target.result as string
+          }
+        ]);
+      }
     };
+    reader.readAsDataURL(file);
+    e.target.value = '';
+  };
 
-    const triggerDmFileInput = () => {
-      dmFileInputRef.current?.click();
-    };
+  const triggerDmFileInput = () => {
+    dmFileInputRef.current?.click();
+  };
 
-    const PRESETS = [
-      'Привет! ⚡',
-      'Как дела? Го в катку? 🎮',
-      'Залетай в голосовой звонок! 🎙️',
-      'Я готов сыграть в Pulse Arena! 🏆'
-    ];
+  const PRESETS = [
+    'Привет! ⚡',
+    'Как дела? Го в катку? 🎮',
+    'Залетай в голосовой звонок! 🎙️',
+    'Я готов сыграть в Pulse Arena! 🏆'
+  ];
 
-    const REACTION_EMOJIS = ['🔥', '🎯', '👑', '⚡', '💯', '🎮', '🚀', '🧠'];
+  const REACTION_EMOJIS = ['🔥', '🎯', '👑', '⚡', '💯', '🎮', '🚀', '🧠'];
 
-    return (
-      <div className="flex-1 bg-transparent relative flex flex-col h-full overflow-hidden select-none">
-        <AnimatedBackground />
-        {/* Chat Header */}
+  return (
+    <div className="flex-1 bg-transparent relative flex h-full overflow-hidden select-none">
+      <AnimatedBackground />
+      {renderDmSidebar()}
+      
+      <div className="flex-1 h-full overflow-hidden relative">
+        <AnimatePresence mode="wait">
+          {activeChatUser ? (
+            <motion.div
+              key={`chat-${activeChatUser.id}`}
+              initial={{ opacity: 0, x: 20 }}
+              animate={{ opacity: 1, x: 0 }}
+              exit={{ opacity: 0, x: 20 }}
+              transition={{ duration: 0.2 }}
+              className="w-full h-full flex flex-col overflow-hidden relative"
+            >
+          {/* Chat Header */}
         <div className="h-16 px-6 bg-[#111113]/80 backdrop-blur-md border-b border-white/[0.06] flex items-center justify-between flex-shrink-0 z-10 relative">
           <div className="flex items-center gap-4">
             <button
@@ -556,7 +729,7 @@ export const FriendsView: React.FC = () => {
         </div>
 
         {/* Message Stream with floating Active Call Panel */}
-        <div className="flex-1 relative overflow-hidden flex flex-col bg-[#09090B]">
+        <div className="flex-1 relative overflow-hidden flex flex-col bg-[#111113]/35 backdrop-blur-md">
 
           {/* Active Call Grid (Discord call stage style) */}
           {activeVoiceChannelId && (
@@ -590,9 +763,9 @@ export const FriendsView: React.FC = () => {
                 isCallStageCollapsed ? 'max-h-0 opacity-0 pt-0' : 'max-h-[500px] opacity-100 pt-2 pb-1'
               }`}>
                 <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 gap-3.5">
-                  {participants.map((p) => (
+                  {participants.filter(p => p && p.user).map((p, idx) => (
                     <div
-                      key={p.user.id}
+                      key={p.user.id || idx}
                       className={`relative p-3 rounded-xl bg-white/[0.02] border transition-all duration-300 flex flex-col items-center justify-center gap-2 ${
                         p.isSpeaking
                           ? 'border-emerald-500 bg-emerald-500/5 shadow-[0_0_15px_rgba(16,185,129,0.15)] scale-[1.02]'
@@ -607,8 +780,8 @@ export const FriendsView: React.FC = () => {
                             : 'ring-0'
                         }`}>
                           <img
-                            src={p.user.avatar}
-                            alt={p.user.displayName}
+                            src={p.user.avatar || 'https://images.unsplash.com/photo-1535713875002-d1d0cf377fde?w=150&auto=format&fit=crop&q=80'}
+                            alt={p.user.displayName || 'Участник'}
                             className="w-12 h-12 rounded-full object-cover"
                             referrerPolicy="no-referrer"
                           />
@@ -624,11 +797,11 @@ export const FriendsView: React.FC = () => {
                       
                       {/* Display name */}
                       <div className="text-center min-w-0 w-full">
-                        <div className="text-[11px] font-bold text-white truncate">{p.user.displayName}</div>
+                        <div className="text-[11px] font-bold text-white truncate">{p.user.displayName || 'Участник'}</div>
                         {p.isSpeaking ? (
                           <div className="text-[8px] text-emerald-400 font-extrabold tracking-wider animate-pulse uppercase">говорит</div>
                         ) : (
-                          <div className="text-[8px] text-[#A1A1AA] truncate">@{p.user.username}</div>
+                          <div className="text-[8px] text-[#A1A1AA] truncate">@{p.user.username || 'user'}</div>
                         )}
                       </div>
                     </div>
@@ -656,36 +829,134 @@ export const FriendsView: React.FC = () => {
                 </div>
               </div>
             ) : (
-              <div className="space-y-4">
-                {threadMessages.map((msg) => {
+              <div className="flex flex-col gap-1">
+                {threadMessages.map((msg, index) => {
                   const isMe = msg.author.id === currentUser.id || msg.author.username === currentUser.username;
+                  const prevMsg = index > 0 ? threadMessages[index - 1] : null;
+                  const isConsecutive = prevMsg && 
+                                       (prevMsg.author.id === msg.author.id || prevMsg.author.username === msg.author.username) &&
+                                       !msg.isPinned && 
+                                       !prevMsg.isPinned;
+                  const shortTime = msg.timestamp.match(/\d{2}:\d{2}/)?.[0] || msg.timestamp;
+
                   return (
                     <motion.div
                       key={msg.id}
                       initial={{ opacity: 0, y: 10 }}
                       animate={{ opacity: 1, y: 0 }}
                       transition={{ duration: 0.15, ease: 'easeOut' }}
-                      className="flex items-start gap-3 group max-w-2xl ml-auto flex-row-reverse text-right"
-                    >
-                      <Avatar 
-                        src={msg.author.avatar} 
-                        alt={msg.author.displayName || msg.author.username} 
-                        size="md" 
-                        status={isMe ? currentUser.status : (friends.find(f => f.username === msg.author.username || f.id === msg.author.id)?.status || msg.author.status || 'online')} 
-                      />
-                      
-                      <div className="space-y-1.5">
-                        <div className="flex items-center gap-2 flex-row-reverse">
-                          <span className="text-xs font-bold text-[#F5F5F7]">{msg.author.displayName || msg.author.username}</span>
-                          <span className="text-[10px] text-[#A1A1AA]">{msg.timestamp}</span>
-                        </div>
+                      onContextMenu={(e) => {
+                        e.preventDefault();
+                        e.stopPropagation();
+                        const menuWidth = 180;
+                        const menuHeight = 120;
+                        let x = e.clientX;
+                        let y = e.clientY;
 
-                        <div className={`p-3.5 rounded-2xl border text-xs leading-relaxed text-right ${
-                          isMe 
-                            ? 'bg-[#22D3EE]/10 border-[#22D3EE]/30 text-[#F5F5F7] rounded-tr-none' 
-                            : 'bg-[#18181B] border-white/10 text-[#F5F5F7] rounded-tr-none'
-                        }`}>
-                          {msg.content}
+                        if (x + menuWidth > window.innerWidth) {
+                          x = window.innerWidth - menuWidth - 10;
+                        }
+                        if (y + menuHeight > window.innerHeight) {
+                          y = window.innerHeight - menuHeight - 10;
+                        }
+
+                        setContextMenu({
+                          x,
+                          y,
+                          messageId: msg.id,
+                          senderId: msg.author.id || '',
+                          messageText: msg.content,
+                          messageObj: msg
+                        });
+                      }}
+                      className={`flex items-start gap-3 group relative max-w-2xl hover:cursor-context-menu ${
+                        isMe ? 'ml-auto flex-row-reverse text-right' : 'mr-auto text-left'
+                      } ${!isConsecutive && index > 0 ? 'mt-4' : ''}`}
+                    >
+                      {isConsecutive ? (
+                        <div className="w-9 h-5 flex-shrink-0 flex items-center justify-center text-right text-[9px] text-[#A1A1AA]/50 select-none">
+                          <span className="opacity-0 group-hover:opacity-100 transition-opacity duration-100">
+                            {shortTime}
+                          </span>
+                        </div>
+                      ) : (
+                        <Avatar 
+                          src={msg.author.avatar} 
+                          alt={msg.author.displayName || msg.author.username} 
+                          size="md" 
+                          status={isMe ? currentUser.status : (friends.find(f => f.username === msg.author.username || f.id === msg.author.id)?.status || msg.author.status || 'online')} 
+                        />
+                      )}
+                      
+                      <div className="space-y-1 flex flex-col items-start max-w-[85%] relative">
+                        {/* Top-right hover indicator */}
+                        <div className="absolute right-0 -top-2.5 opacity-0 group-hover:opacity-100 transition-opacity duration-150 text-[9px] font-semibold text-amber-400 bg-[#111113]/90 border border-amber-500/30 px-1.5 py-0.5 rounded-md pointer-events-none z-10 select-none shadow-md">
+                          ПКМ
+                        </div>
+                        {!isConsecutive && (
+                          <div className={`flex items-center gap-2 ${isMe ? 'flex-row-reverse' : ''}`}>
+                            <span className="text-xs font-bold text-[#F5F5F7]">{msg.author.displayName || msg.author.username}</span>
+                            <span className="text-[10px] text-[#A1A1AA]">{msg.timestamp}</span>
+
+
+                          </div>
+                        )}
+
+                          <div className={`p-3.5 rounded-2xl border text-xs leading-relaxed ${
+                            isMe 
+                              ? `bg-[#22D3EE]/10 border-[#22D3EE]/30 text-[#F5F5F7] text-right ${isConsecutive ? 'rounded-2xl' : 'rounded-tr-none'}` 
+                              : `bg-[#18181B] border-white/10 text-[#F5F5F7] text-left ${isConsecutive ? 'rounded-2xl' : 'rounded-tl-none'}`
+                          }`}>
+                          {editingMessageId === msg.id ? (
+                            <div className="flex flex-col gap-2.5 min-w-[280px] text-left" onClick={(e) => e.stopPropagation()} onContextMenu={(e) => e.stopPropagation()}>
+                              <div className="flex items-center justify-between text-[11px] text-[#22D3EE] font-semibold px-1">
+                                <span className="flex items-center gap-1.5">
+                                  <Edit className="w-3 h-3" /> Редактирование сообщения
+                                </span>
+                                <span className="text-[10px] text-[#A1A1AA]">Esc для отмены, Enter ↵</span>
+                              </div>
+                              <textarea
+                                value={editingText}
+                                onChange={(e) => setEditingText(e.target.value)}
+                                onKeyDown={(e) => {
+                                  if (e.key === 'Enter' && !e.shiftKey) {
+                                    e.preventDefault();
+                                    editMessage(threadId, msg.id, editingText, currentUser.id);
+                                    setEditingMessageId(null);
+                                  } else if (e.key === 'Escape') {
+                                    setEditingMessageId(null);
+                                  }
+                                }}
+                                className="w-full bg-[#111113] border border-white/10 focus:border-[#22D3EE] rounded-xl px-3.5 py-2.5 text-xs text-[#F5F5F7] outline-none resize-none min-h-[64px] shadow-inner transition-colors text-left"
+                                placeholder="Введите новый текст..."
+                                autoComplete="off"
+                                autoCorrect="off"
+                                spellCheck={false}
+                                autoFocus
+                              />
+                              <div className="flex items-center justify-end gap-2 pt-1">
+                                <button
+                                  onClick={() => setEditingMessageId(null)}
+                                  className="px-3 py-1.5 rounded-xl bg-white/5 hover:bg-white/10 text-[#A1A1AA] hover:text-white text-xs font-semibold transition-all cursor-pointer flex items-center gap-1"
+                                >
+                                  <X className="w-3 h-3" />
+                                  <span>Отмена</span>
+                                </button>
+                                <button
+                                  onClick={() => {
+                                    editMessage(threadId, msg.id, editingText, currentUser.id);
+                                    setEditingMessageId(null);
+                                  }}
+                                  className="px-3.5 py-1.5 rounded-xl bg-[#22D3EE] hover:bg-[#06b6d4] text-[#09090B] text-xs font-bold transition-all cursor-pointer flex items-center gap-1.5 shadow-lg shadow-cyan-500/20"
+                                >
+                                  <Check className="w-3.5 h-3.5" />
+                                  <span>Сохранить</span>
+                                </button>
+                              </div>
+                            </div>
+                          ) : (
+                            msg.content
+                          )}
 
                            {/* Attachments rendering */}
                            {msg.attachments && msg.attachments.length > 0 && (
@@ -793,41 +1064,7 @@ export const FriendsView: React.FC = () => {
                            )}
                         </div>
 
-                        {/* Reactions Drawer */}
-                        <div className="flex flex-wrap items-center gap-1.5 pt-0.5 justify-end">
-                          {/* Current message reactions */}
-                          {msg.reactions && msg.reactions.map((r) => {
-                            const hasMyReaction = r.users.includes(currentUser.id);
-                            return (
-                              <button
-                                key={r.emoji}
-                                onClick={() => toggleReactionDm(msg.id, r.emoji)}
-                                className={`px-2 py-1 rounded-lg text-[11px] font-semibold border flex items-center gap-1 transition-all cursor-pointer ${
-                                  hasMyReaction
-                                    ? 'bg-[#22D3EE]/20 border-[#22D3EE]/40 text-[#22D3EE]'
-                                    : 'bg-white/5 border-white/[0.06] text-[#A1A1AA] hover:text-[#F5F5F7]'
-                                }`}
-                              >
-                                <span>{r.emoji}</span>
-                                <span>{r.count}</span>
-                              </button>
-                            );
-                          })}
 
-                          {/* Quick reaction action keys (visible on hover) */}
-                          <div className="opacity-0 group-hover:opacity-100 transition-opacity duration-150 flex items-center gap-1 bg-[#111113] border border-white/[0.06] p-0.5 rounded-lg">
-                            {REACTION_EMOJIS.slice(0, 5).map((emoji) => (
-                              <button
-                                key={emoji}
-                                onClick={() => toggleReactionDm(msg.id, emoji)}
-                                className="p-1 rounded text-xs hover:bg-white/5 cursor-pointer"
-                                title={`Добавить ${emoji}`}
-                              >
-                                {emoji}
-                              </button>
-                            ))}
-                          </div>
-                        </div>
                       </div>
                     </motion.div>
                   );
@@ -850,7 +1087,7 @@ export const FriendsView: React.FC = () => {
         </div>
 
         {/* Input Controls */}
-        <div className={`p-4 bg-[#09090B] border-t border-white/[0.06] space-y-3 flex-shrink-0 transition-all ${activeVoiceChannelId ? 'pl-64 sm:pl-72' : ''}`}>
+        <div className={`p-4 bg-[#111113]/45 backdrop-blur-md border-t border-white/[0.06] space-y-3 flex-shrink-0 transition-all ${activeVoiceChannelId ? 'pl-64 sm:pl-72' : ''}`}>
           {/* Attachments preview */}
           {dmAttachments.length > 0 && (
             <div className="flex items-center gap-2 p-2 rounded-2xl bg-[#111113] border border-white/[0.06]">
@@ -902,14 +1139,6 @@ export const FriendsView: React.FC = () => {
             />
 
             <button
-              onClick={() => dmImageInputRef.current?.click()}
-              title="Отправить фотографию"
-              className="p-2 text-[#A1A1AA] hover:text-[#22D3EE] transition-colors rounded-xl hover:bg-white/5 cursor-pointer"
-            >
-              <ImageIcon className="w-4 h-4" />
-            </button>
-
-            <button
               onClick={triggerDmFileInput}
               title="Прикрепить файл или медиа"
               className="p-2 text-[#A1A1AA] hover:text-[#22D3EE] transition-colors rounded-xl hover:bg-white/5 cursor-pointer"
@@ -958,14 +1187,67 @@ export const FriendsView: React.FC = () => {
             />
           </div>
         )}
-      </div>
-    );
-  }
 
-  return (
-    <div className="flex-1 bg-transparent relative flex flex-col select-none overflow-y-auto p-4 sm:p-8 h-full">
-      <AnimatedBackground />
-      <div className="relative z-10 max-w-4xl mx-auto w-full space-y-6">
+        {/* Message Context Menu for DMs */}
+        {contextMenu && (
+          <div
+            style={{ top: contextMenu.y, left: contextMenu.x }}
+            className="fixed bg-[#09090B] border border-white/[0.08] rounded-xl p-1 shadow-2xl z-[100] flex flex-col min-w-[170px] animate-in fade-in zoom-in-95 duration-100"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <button
+              onClick={() => {
+                navigator.clipboard.writeText(contextMenu.messageText);
+                setContextMenu(null);
+              }}
+              className="flex items-center gap-2 px-3 py-2 text-xs text-[#A1A1AA] hover:text-[#F5F5F7] hover:bg-white/5 rounded-lg text-left cursor-pointer transition-colors"
+            >
+              <Copy className="w-3.5 h-3.5" />
+              <span>Копировать текст</span>
+            </button>
+
+            {(String(contextMenu.senderId) === String(currentUser.id) || 
+              (contextMenu.messageObj?.author?.username && contextMenu.messageObj.author.username === currentUser.username)) && (
+              <>
+                <div className="h-px bg-white/5 my-1" />
+                <button
+                  onClick={() => {
+                    setEditingMessageId(contextMenu.messageId);
+                    setEditingText(contextMenu.messageText);
+                    setContextMenu(null);
+                  }}
+                  className="flex items-center gap-2 px-3 py-2 text-xs text-[#A1A1AA] hover:text-[#22D3EE] hover:bg-white/5 rounded-lg text-left cursor-pointer transition-colors"
+                >
+                  <Edit className="w-3.5 h-3.5" />
+                  <span>Редактировать</span>
+                </button>
+                <button
+                  onClick={() => {
+                    if (confirm('Вы уверены, что хотите удалить это сообщение для всех?')) {
+                      deleteMessage(threadId, contextMenu.messageId, currentUser.id);
+                    }
+                    setContextMenu(null);
+                  }}
+                  className="flex items-center gap-2 px-3 py-2 text-xs text-rose-500 hover:bg-rose-500/10 hover:text-rose-400 rounded-lg text-left cursor-pointer transition-colors"
+                >
+                  <Trash2 className="w-3.5 h-3.5" />
+                  <span>Удалить сообщение</span>
+                </button>
+              </>
+            )}
+          </div>
+        )}
+            </motion.div>
+          ) : (
+            <motion.div
+              key="friends-hub"
+              initial={{ opacity: 0, x: -20 }}
+              animate={{ opacity: 1, x: 0 }}
+              exit={{ opacity: 0, x: -20 }}
+              transition={{ duration: 0.2 }}
+              className="w-full h-full overflow-y-auto p-4 sm:p-8 relative"
+            >
+              <div className="relative z-10 max-w-4xl mx-auto w-full space-y-6">
         {/* User Status & Profile Header Banner */}
         <div className="p-6 rounded-3xl bg-gradient-to-r from-[#17171C] via-[#111113] to-[#17171C] border border-white/[0.08] relative overflow-hidden shadow-2xl">
           <div className="absolute top-0 right-0 w-80 h-80 bg-[#22D3EE]/10 rounded-full blur-3xl pointer-events-none" />
@@ -1553,6 +1835,10 @@ export const FriendsView: React.FC = () => {
             </div>
           </div>
         )}
+              </div>
+            </motion.div>
+          )}
+        </AnimatePresence>
       </div>
     </div>
   );
